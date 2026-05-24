@@ -1,0 +1,654 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>FreshPro System PRO</title>
+
+<script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
+
+<style>
+body { 
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+  padding:10px; 
+  background:linear-gradient(135deg, #f5f0ff 0%, #ede5ff 100%);
+  margin:0;
+}
+
+header {
+  background:linear-gradient(135deg, #6B4C9A 0%, #7B68BE 100%);
+  padding:20px;
+  border-radius:12px;
+  margin-bottom:15px;
+  box-shadow:0 4px 12px rgba(107, 76, 154, 0.3);
+  text-align:center;
+  color:white;
+}
+
+.logo-container {
+  display:flex;
+  justify-content:center;
+  align-items:center;
+  gap:15px;
+}
+
+.logo-text {
+  font-size:32px;
+}
+
+header h1 {
+  margin:0;
+  font-size:28px;
+  font-weight:700;
+  letter-spacing:-0.5px;
+}
+
+header p {
+  margin:5px 0 0 0;
+  font-size:13px;
+  opacity:0.9;
+  letter-spacing:2px;
+}
+
+.card {
+  background:white;
+  padding:15px;
+  margin-top:10px;
+  border-radius:12px;
+  box-shadow:0 2px 8px rgba(107, 76, 154, 0.15);
+  border-left:4px solid #6B4C9A;
+}
+
+button {
+  background:linear-gradient(135deg, #6B4C9A 0%, #7B68BE 100%);
+  color:white;
+  border:none;
+  padding:14px;
+  margin-top:10px;
+  font-size:18px;
+  width:100%;
+  border-radius:8px;
+  cursor:pointer;
+  font-weight:600;
+  transition:all 0.3s ease;
+  box-shadow:0 2px 8px rgba(107, 76, 154, 0.2);
+}
+
+button:hover {
+  background:linear-gradient(135deg, #5A3A8A 0%, #6B4C9A 100%);
+  box-shadow:0 4px 12px rgba(107, 76, 154, 0.3);
+  transform:translateY(-2px);
+}
+
+input {
+  width:100%;
+  padding:14px;
+  margin-top:10px;
+  font-size:18px;
+  border:2px solid #E5DDF5;
+  border-radius:8px;
+  box-sizing:border-box;
+  transition:border-color 0.3s ease;
+}
+
+input:focus {
+  outline:none;
+  border-color:#6B4C9A;
+  box-shadow:0 0 8px rgba(107, 76, 154, 0.2);
+}
+
+.item {
+  padding:10px;
+  border-bottom:1px solid #eee;
+  cursor:pointer;
+  transition:all 0.2s ease;
+}
+
+.item:hover { 
+  background:#f5f0ff;
+  padding-left:15px;
+}
+
+.badge {
+  float:right;
+  background:linear-gradient(135deg, #FFD700 0%, #FFC107 100%);
+  color:#333;
+  padding:4px 10px;
+  border-radius:20px;
+  font-weight:700;
+  font-size:12px;
+  box-shadow:0 2px 4px rgba(255, 215, 0, 0.3);
+}
+
+.status-dot {
+  display:inline-block;
+  width:12px;
+  height:12px;
+  background:#28a745;
+  border-radius:50%;
+  vertical-align:middle;
+  margin-left:8px;
+}
+
+h3 {
+  color:#6B4C9A;
+  margin-top:0;
+}
+</style>
+</head>
+
+<body>
+
+<!-- 密码登录 -->
+<div id="loginPopup" style="display:flex; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.7); z-index:10000; justify-content:center; align-items:center;">
+  <div style="background:white; padding:30px; border-radius:10px; text-align:center; min-width:300px; box-shadow:0 10px 40px rgba(0,0,0,0.2);">
+    <h2 style="color:#6B4C9A; margin-top:0;">🔐 Access Required</h2>
+    <p style="color:#555; margin:10px 0;">Enter password to continue:</p>
+    <input id="passwordInput" type="password" placeholder="Enter password" onkeypress="if(event.key==='Enter') verifyPassword()" style="width:100%; padding:12px; font-size:16px; margin:15px 0; box-sizing:border-box; border:2px solid #E5DDF5; border-radius:8px;" autofocus />
+    <button onclick="verifyPassword()" style="width:100%; padding:12px; font-size:18px; background:linear-gradient(135deg, #6B4C9A 0%, #7B68BE 100%);">Login</button>
+    <p style="color:#999; font-size:12px; margin-top:20px; letter-spacing:0.5px;">
+  </div>
+</div>
+
+<!-- Header with Logo -->
+<header>
+  <div class="logo-container">
+    <div class="logo-text">🌾</div>
+    <div>
+      <h1>FreshPro Foodmart</h1>
+      <p>ORDER SYSTEM</p>
+    </div>
+  </div>
+</header>
+
+<div class="card">
+  <button onclick="syncData()">🔄 Sync Cloud</button>
+  <p id="status">Status: Not Synced</p>
+</div>
+
+<div class="card">
+  <input id="barcode" placeholder="Scan UPC" onkeypress="handleEnter(event)" autofocus />
+  <button onclick="startCameraScan()">📷 Scan Barcode by Camera</button>
+  <div id="cameraScanPanel" style="display:none; margin-top:12px;">
+    <video id="cameraVideo" autoplay playsinline style="width:100%; max-height:320px; background:#000; border-radius:8px; object-fit:cover;"></video>
+    <p id="cameraStatus" style="margin:10px 0 0; color:#555; font-size:14px;">Point your camera at a barcode.</p>
+    <button onclick="stopCameraScan()" style="margin-top:10px;">Stop Camera</button>
+  </div>
+</div>
+
+<div class="card">
+  <input id="search" placeholder="🔍 Search by Name" onkeypress="handleSearchEnter(event)" />
+  <button onclick="searchProducts()">Search</button>
+</div>
+
+<div class="card">
+  <h3>Items</h3>
+  <div id="list"></div>
+</div>
+
+<div class="card">
+  <button onclick="exportExcel()">📦 Export Excel</button>
+</div>
+
+<!-- 新产品 -->
+<div id="popup" style="display:none; position:fixed; top:10%; left:5%; width:90%; background:white; padding:20px; border-radius:10px; z-index:999;">
+<h3>Add Product</h3>
+<input id="new_upc" readonly>
+<input id="new_name" placeholder="Name">
+<input id="new_price" placeholder="Price">
+<input id="new_location" placeholder="Location">
+<input id="new_supplier" placeholder="Supplier">
+<input id="new_cost" placeholder="Cost">
+<button onclick="saveNewProduct()">💾 Save</button>
+<button onclick="closePopup()">Cancel</button>
+</div>
+
+<!-- 编辑 -->
+<div id="editPopup" style="display:none; position:fixed; top:10%; left:5%; width:90%; background:white; padding:20px; border-radius:10px; z-index:999;">
+<h3>Update Product</h3>
+<input id="edit_upc" readonly>
+<input id="edit_name">
+<input id="edit_price">
+<input id="edit_location">
+<input id="edit_supplier">
+<input id="edit_cost">
+<button onclick="updateProduct()">💾 Save</button>
+<button onclick="closeEdit()">Cancel</button>
+</div>
+
+<!-- 操作弹窗 -->
+<div id="actionPopup" style="display:none; position:fixed; top:15%; left:5%; width:90%; background:white; padding:20px; border-radius:12px; z-index:999;">
+<h3>Product Action</h3>
+<p id="actionInfo"></p>
+<div style="margin-top:8px; display:flex; gap:8px;">
+  <input id="action_qty" type="number" min="0" placeholder="Qty" style="flex:1; padding:8px; font-size:16px;" />
+  <button onclick="setItemQty()" style="flex:0 0 120px;">Set Qty</button>
+</div>
+<div style="margin-top:10px; display:flex; gap:8px;">
+  <button onclick="removeItem()">❌ Remove</button>
+  <button onclick="editItem()">✏️ Update</button>
+  <button onclick="closeAction()">Cancel</button>
+</div>
+</div>
+
+<!-- 搜索结果 -->
+<div id="searchPopup" style="display:none; position:fixed; top:10%; left:5%; width:90%; background:white; padding:20px; border-radius:10px; z-index:999; max-height:70vh; overflow-y:auto;">
+<div style="position:sticky; top:0; background:white; z-index:1000; display:flex; justify-content:flex-start; align-items:center; gap:10px; margin:-20px -20px 10px -20px; padding:10px 20px; border-bottom:1px solid #eee; border-radius:10px 10px 0 0;">
+  <button onclick="closeSearch()" style="width:auto; padding:10px 16px; font-size:40px; background:none; border:none; cursor:pointer; color:#999; margin:0; line-height:1;">×</button>
+  <h3 style="margin:0;">Search Results</h3>
+</div>
+<div id="searchResults"></div>
+<button onclick="closeSearch()" style="width:100%; margin-top:10px;">Close</button>
+</div>
+
+<script>
+
+const API = "https://script.google.com/macros/s/AKfycbw8n_Yd8g0hY5UOQQlFLpuowfc35a0wtLCI1ac9k-46TVDB20iPtR9nXieb9tFQE5QNtQ/exec";
+
+let db = {};
+let scanMap = {};
+let currentItem = null;
+let isAuthenticated = false;
+let cameraStream = null;
+let cameraScanActive = false;
+let cameraFrameId = null;
+let barcodeDetector = null;
+const PASSWORD = "7333";
+const statusEl = document.getElementById("status");
+const cameraVideo = document.getElementById("cameraVideo");
+const cameraStatus = document.getElementById("cameraStatus");
+const cameraScanPanel = document.getElementById("cameraScanPanel");
+
+// 密码验证
+function verifyPassword(){
+  const pwd = document.getElementById("passwordInput").value;
+  if(pwd === PASSWORD) {
+    isAuthenticated = true;
+    document.getElementById("loginPopup").style.display = "none";
+    document.getElementById("passwordInput").value = "";
+    loadLocalDB();
+  } else {
+    alert("Incorrect password!");
+    document.getElementById("passwordInput").value = "";
+  }
+}
+
+// 同步
+function syncData() {
+  statusEl.innerText = "Syncing...";
+  fetch(API)
+  .then(r=>r.json())
+  .then(data=>{
+    db = {};
+    data.forEach(row=>{
+      db[row[1]] = {
+        name: row[0],
+        upc: row[1],
+        price: row[2],
+        location: row[3]||"",
+        supplier: row[4]||"",
+        cost: row[5]||0
+      };
+    });
+    localStorage.setItem("productDB", JSON.stringify(db));
+    statusEl.innerHTML = 'Status: Synced <span class="status-dot"></span>';
+  })
+  .catch(()=>{
+    statusEl.innerText = "Status: Not Synced";
+  });
+}
+
+function loadLocalDB(){
+  const d = localStorage.getItem("productDB");
+  if(d){
+    db = JSON.parse(d);
+    statusEl.innerText = "⚡ Local Mode";
+  }
+}
+
+function handleEnter(e){
+  if(e.key==="Enter") scanProduct();
+}
+
+function handleSearchEnter(e){
+  if(e.key==="Enter") searchProducts();
+}
+
+function stopCameraScan(){
+  cameraScanActive = false;
+  if(cameraFrameId) {
+    cancelAnimationFrame(cameraFrameId);
+    cameraFrameId = null;
+  }
+
+  if(cameraStream) {
+    cameraStream.getTracks().forEach(track => track.stop());
+    cameraStream = null;
+  }
+
+  if(cameraVideo) {
+    cameraVideo.srcObject = null;
+  }
+
+  cameraScanPanel.style.display = "none";
+  cameraStatus.innerText = "";
+}
+
+async function startCameraScan(){
+  if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+    alert("Camera access is not supported on this browser.");
+    return;
+  }
+
+  if(!window.isSecureContext){
+    cameraStatus.innerText = "Camera scan requires HTTPS or localhost. Please open this page via a local server and try again.";
+    alert("Camera scan requires HTTPS or localhost. Please open this page through a secure/local server.");
+    return;
+  }
+
+  if(!("BarcodeDetector" in window)){
+    alert("Camera scanning is not supported on this browser. Please use the barcode input or update your browser.");
+    return;
+  }
+
+  if(!barcodeDetector){
+    barcodeDetector = new BarcodeDetector({
+      formats: ["ean_13", "ean_8", "upc_a", "upc_e", "code_128", "code_39", "qr_code"]
+    });
+  }
+
+  try {
+    cameraStatus.innerText = "Requesting camera access...";
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        facingMode: { ideal: "environment" }
+      }
+    });
+
+    cameraStream = stream;
+    cameraVideo.srcObject = stream;
+    cameraScanPanel.style.display = "block";
+    cameraScanActive = true;
+    cameraStatus.innerText = "Point your camera at a barcode.";
+
+    const detectLoop = async () => {
+      if(!cameraScanActive) return;
+
+      try {
+        const detections = await barcodeDetector.detect(cameraVideo);
+        if(detections.length > 0){
+          const value = String(detections[0].rawValue || "").trim();
+          if(value){
+            cameraStatus.innerText = `Detected: ${value}`;
+            barcode.value = value;
+            stopCameraScan();
+            scanProduct();
+            return;
+          }
+        }
+      } catch(error) {
+        cameraStatus.innerText = "Scanning failed. Please try again.";
+      }
+
+      cameraFrameId = requestAnimationFrame(detectLoop);
+    };
+
+    cameraFrameId = requestAnimationFrame(detectLoop);
+  } catch(error) {
+    cameraStatus.innerText = "Camera permission denied or unavailable.";
+    alert("Unable to access your camera. Please allow camera access or use the barcode input.");
+  }
+}
+
+// 搜索产品 - 所有关键字都需要完全匹配（忽略大小写和符号）
+function searchProducts(){
+  const rawKeyword = document.getElementById("search").value.trim();
+  if(!rawKeyword) return alert("Please enter product name or UPC");
+
+  const normalize = text => String(text || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  const keywords = rawKeyword.toLowerCase().split(/\s+/).filter(Boolean);
+
+  const results = Object.values(db)
+    .map(p => {
+      const fields = [p.name, p.upc, p.location, p.supplier, p.price, p.cost].join(" ");
+      const normalizedFields = normalize(fields);
+
+      // 检查所有关键字是否都存在于产品数据中
+      const allMatch = keywords.every(term => {
+        const normalizedTerm = normalize(term);
+        return normalizedFields.includes(normalizedTerm);
+      });
+
+      // 如果所有关键字都匹配，返回该产品
+      return { ...p, match: allMatch };
+    })
+    .filter(p => p.match)
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  if(results.length === 0){
+    alert("No products found. Make sure all keywords match.");
+    return;
+  }
+
+  const resultsHtml = results.map((p) => {
+    return '<div style="padding:10px; border:1px solid #ddd; margin:10px 0; border-radius:5px; cursor:pointer;" onclick="addFromSearch(\'' + p.upc + '\')">' +
+      '<b>' + p.name + '</b><br>' +
+      'UPC: ' + p.upc + '<br>' +
+      'Price: $' + p.price + ' | Location: ' + p.location + '<br>' +
+      'Supplier: ' + p.supplier + ' | Cost: $' + p.cost +
+    '</div>';
+  }).join("");
+
+  document.getElementById("searchResults").innerHTML = resultsHtml;
+  document.getElementById("searchPopup").style.display = "block";
+}
+
+function addFromSearch(upc){
+  if(!scanMap[upc]) scanMap[upc] = {...db[upc], qty:0};
+  scanMap[upc].qty++;
+  renderList();
+  closeSearch();
+  document.getElementById("search").value = "";
+}
+
+function closeSearch(){
+  document.getElementById("searchPopup").style.display = "none";
+}
+
+// 扫码
+function scanProduct(){
+  const code = barcode.value.trim();
+  if(!code) return;
+
+  const p = db[code];
+
+  if(!p){
+    if(confirm("Not found. Add?")) openPopup(code);
+    return;
+  }
+
+  if(!scanMap[code]) scanMap[code] = {...p, qty:0};
+  scanMap[code].qty++;
+
+  renderList();
+  barcode.value="";
+}
+
+// 渲染
+function renderList(){
+  list.innerHTML="";
+  Object.values(scanMap).reverse().forEach(p=>{
+    const d=document.createElement("div");
+    d.className="item";
+
+    d.innerHTML=`
+      <b>${p.name}</b> <span class="badge">${p.qty} cs</span><br>
+      UPC: ${p.upc}<br>
+      Price: $${p.price}<br>
+      Loc: ${p.location}<br>
+      Supplier: ${p.supplier}<br>
+      Cost: $${p.cost}
+    `;
+
+    d.onclick=()=>showActionPopup(p);
+    list.appendChild(d);
+  });
+}
+
+// Action
+function showActionPopup(p){
+  currentItem=p;
+  actionInfo.innerHTML=`
+  <b>${p.name}</b><br>
+  ${p.upc}<br>
+  $${p.price} | ${p.location}<br>
+  ${p.supplier} | $${p.cost}
+  `;
+  // populate qty input
+  const qtyInput = document.getElementById('action_qty');
+  if(qtyInput) qtyInput.value = p.qty || 0;
+  actionPopup.style.display="block";
+}
+
+function closeAction(){ actionPopup.style.display="none"; }
+
+function removeItem(){
+  delete scanMap[currentItem.upc];
+  closeAction();
+  renderList();
+}
+
+function editItem(){
+  closeAction();
+  openEditPopup(currentItem);
+}
+
+function setItemQty(){
+  const v = parseInt(document.getElementById('action_qty').value || '0', 10);
+  if(isNaN(v) || v < 0) return alert('Enter a valid quantity');
+  if(!currentItem) return;
+  if(v === 0){
+    // remove if zero
+    delete scanMap[currentItem.upc];
+  } else {
+    if(!scanMap[currentItem.upc]) scanMap[currentItem.upc] = {...db[currentItem.upc], qty:0};
+    scanMap[currentItem.upc].qty = v;
+  }
+  closeAction();
+  renderList();
+}
+
+// 新产品
+function openPopup(code){
+  popup.style.display="block";
+  new_upc.value=code;
+}
+
+function closePopup(){ popup.style.display="none"; }
+
+function saveNewProduct(){
+  const data={
+    upc:new_upc.value,
+    name:new_name.value,
+    price:new_price.value,
+    location:new_location.value,
+    supplier:new_supplier.value,
+    cost:new_cost.value
+  };
+
+  fetch(API,{method:"POST",body:JSON.stringify(data)})
+  .then(()=>{
+    db[data.upc]=data;
+    localStorage.setItem("productDB",JSON.stringify(db));
+    closePopup();
+  });
+}
+
+// 编辑
+function openEditPopup(p){
+  editPopup.style.display="block";
+  edit_upc.value=p.upc;
+  edit_name.value=p.name;
+  edit_price.value=p.price;
+  edit_location.value=p.location;
+  edit_supplier.value=p.supplier;
+  edit_cost.value=p.cost;
+}
+
+function closeEdit(){ editPopup.style.display="none"; }
+
+function updateProduct(){
+  const data={
+    action:"update",
+    upc:edit_upc.value,
+    name:edit_name.value,
+    price:edit_price.value,
+    location:edit_location.value,
+    supplier:edit_supplier.value,
+    cost:edit_cost.value
+  };
+
+  fetch(API,{method:"POST",body:JSON.stringify(data)})
+  .then(()=>{
+    db[data.upc]=data;
+    scanMap[data.upc]={...data,qty:scanMap[data.upc].qty};
+    localStorage.setItem("productDB",JSON.stringify(db));
+    closeEdit();
+    renderList();
+  });
+}
+
+// Excel
+function exportExcel(){
+  const items=Object.values(scanMap);
+  if(!items.length) return alert("No data");
+
+  const wb=XLSX.utils.book_new();
+  const group={};
+
+  items.forEach(p=>{
+    if(!group[p.supplier]) group[p.supplier]=[];
+    group[p.supplier].push(p);
+  });
+
+  Object.keys(group).forEach(s=>{
+    const arr=[["UPC","Name","Qty","Cost","Total"]];
+    group[s].forEach(p=>{
+      arr.push([p.upc,p.name,p.qty,p.cost,p.qty*p.cost]);
+    });
+    const ws=XLSX.utils.aoa_to_sheet(arr);
+    
+    // 自动调整列宽
+    const colWidths = [];
+    arr[0].forEach((_, colIdx) => {
+      let maxLen = arr[0][colIdx].toString().length;
+      for(let row = 1; row < arr.length; row++){
+        const len = arr[row][colIdx].toString().length;
+        if(len > maxLen) maxLen = len;
+      }
+      colWidths.push({wch: maxLen + 2});
+    });
+    ws['!cols'] = colWidths;
+    
+    XLSX.utils.book_append_sheet(wb,ws,s);
+  });
+
+  const now = new Date();
+  const pad = num => String(num).padStart(2, "0");
+  const fileName = `7333 Goreway ${pad(now.getDate())}/${pad(now.getMonth()+1)}/${now.getFullYear()}/ ${pad(now.getHours())}.xlsx`;
+  XLSX.writeFile(wb, fileName);
+}
+
+// 页面加载时显示密码验证弹窗
+document.addEventListener("DOMContentLoaded", function() {
+  document.getElementById("passwordInput").focus();
+  if (screen.orientation && screen.orientation.lock) {
+    screen.orientation.lock('portrait').catch(() => {
+      // 部分浏览器或 iOS 不支持锁定，保留 CSS 限制提示即可
+    });
+  }
+});
+
+</script>
+
+</body>
+</html>
