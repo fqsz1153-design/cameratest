@@ -108,6 +108,58 @@ input:focus {
   padding-left:15px;
 }
 
+.search-result-card {
+  position:relative;
+  padding:12px 12px 12px 52px;
+  border:1px solid #ddd;
+  margin:10px 0;
+  border-radius:8px;
+  background:#fff;
+  cursor:pointer;
+  transition:all 0.2s ease;
+}
+
+.search-result-card:hover {
+  background:#f8f4ff;
+}
+
+.search-result-card.selected {
+  background:#e8f2ff;
+  border-color:#8db8ff;
+}
+
+.search-result-card.selected .selection-toggle {
+  background:#6B4C9A;
+  color:#fff;
+}
+
+.search-result-card .product-meta {
+  display:flex;
+  flex-direction:column;
+  gap:4px;
+  font-size:14px;
+  color:#444;
+}
+
+.selection-toggle {
+  position:absolute;
+  top:12px;
+  left:12px;
+  width:30px;
+  height:30px;
+  border-radius:50%;
+  border:2px solid #6B4C9A;
+  background:transparent;
+  color:#6B4C9A;
+  font-size:18px;
+  line-height:1;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  cursor:pointer;
+  padding:0;
+}
+
 .badge {
   float:right;
   background:linear-gradient(135deg, #FFD700 0%, #FFC107 100%);
@@ -127,6 +179,15 @@ input:focus {
   border-radius:50%;
   vertical-align:middle;
   margin-left:8px;
+}
+
+button.sync-info-btn {
+  background:linear-gradient(135deg, #2563eb 0%, #3b82f6 100%);
+  box-shadow:0 2px 8px rgba(59, 130, 246, 0.2);
+}
+
+button.sync-info-btn:hover {
+  background:linear-gradient(135deg, #1d4ed8 0%, #2563eb 100%);
 }
 
 h3 {
@@ -186,6 +247,7 @@ h3 {
 </div>
 
 <div class="card">
+  <button onclick="syncInfo()" class="sync-info-btn">🔁 Sync Info</button>
   <button onclick="exportExcel()">📦 Export Excel</button>
 </div>
 
@@ -204,7 +266,7 @@ h3 {
 
 <!-- 编辑 -->
 <div id="editPopup" style="display:none; position:fixed; top:10%; left:5%; width:90%; background:white; padding:20px; border-radius:10px; z-index:999;">
-<h3>Update Product</h3>
+<h3>Edit Product</h3>
 <input id="edit_upc" readonly>
 <input id="edit_name">
 <input id="edit_price">
@@ -225,7 +287,7 @@ h3 {
 </div>
 <div style="margin-top:10px; display:flex; gap:8px;">
   <button onclick="removeItem()">❌ Remove</button>
-  <button onclick="editItem()">✏️ Update</button>
+  <button onclick="editItem()">✏️ Edit</button>
   <button onclick="closeAction()">Cancel</button>
 </div>
 </div>
@@ -237,7 +299,10 @@ h3 {
   <h3 style="margin:0;">Search Results</h3>
 </div>
 <div id="searchResults"></div>
-<button onclick="closeSearch()" style="width:100%; margin-top:10px;">Close</button>
+<div style="position:sticky; bottom:0; background:white; padding-top:12px; display:flex; gap:10px; align-items:center;">
+  <button onclick="addSelectedFromSearch()" style="width:auto; padding:12px 18px; margin:0;">ADD</button>
+  <button onclick="closeSearch()" style="flex:1; margin:0;">Close</button>
+</div>
 </div>
 
 <script>
@@ -252,6 +317,8 @@ let cameraStream = null;
 let cameraScanActive = false;
 let cameraFrameId = null;
 let barcodeDetector = null;
+let selectedSearchUpcs = new Set();
+let currentSearchResults = [];
 const PASSWORD = "7333";
 const statusEl = document.getElementById("status");
 const cameraVideo = document.getElementById("cameraVideo");
@@ -272,28 +339,57 @@ function verifyPassword(){
   }
 }
 
+async function syncCatalogData(){
+  const response = await fetch(API);
+  if(!response.ok) throw new Error("sync failed");
+
+  const data = await response.json();
+  db = {};
+  data.forEach(row=>{
+    db[row[1]] = {
+      name: row[0],
+      upc: row[1],
+      price: row[2],
+      location: row[3]||"",
+      supplier: row[4]||"",
+      cost: row[5]||0
+    };
+  });
+
+  Object.keys(scanMap).forEach(upc=>{
+    if(db[upc]){
+      scanMap[upc] = {...db[upc], qty: scanMap[upc].qty};
+    }
+  });
+
+  localStorage.setItem("productDB", JSON.stringify(db));
+  renderList();
+
+  if(document.getElementById("searchPopup").style.display === "block"){
+    refreshSearchResults();
+  }
+}
+
 // 同步
 function syncData() {
   statusEl.innerText = "Syncing...";
-  fetch(API)
-  .then(r=>r.json())
-  .then(data=>{
-    db = {};
-    data.forEach(row=>{
-      db[row[1]] = {
-        name: row[0],
-        upc: row[1],
-        price: row[2],
-        location: row[3]||"",
-        supplier: row[4]||"",
-        cost: row[5]||0
-      };
-    });
-    localStorage.setItem("productDB", JSON.stringify(db));
+  syncCatalogData()
+  .then(()=>{
     statusEl.innerHTML = 'Status: Synced <span class="status-dot"></span>';
   })
   .catch(()=>{
     statusEl.innerText = "Status: Not Synced";
+  });
+}
+
+function syncInfo(){
+  statusEl.innerText = "Syncing Info...";
+  syncCatalogData()
+  .then(()=>{
+    statusEl.innerHTML = 'Status: Info Synced <span class="status-dot"></span>';
+  })
+  .catch(()=>{
+    statusEl.innerText = "Status: Sync Failed";
   });
 }
 
@@ -399,10 +495,72 @@ async function startCameraScan(){
   }
 }
 
+function createSearchLabel(text){
+  const label = document.createElement("div");
+  label.textContent = text;
+  return label;
+}
+
+function renderSearchResults(results){
+  currentSearchResults = results;
+  const searchResults = document.getElementById("searchResults");
+  searchResults.innerHTML = "";
+
+  results.forEach(p => {
+    const card = document.createElement("div");
+    card.className = selectedSearchUpcs.has(p.upc) ? "search-result-card selected" : "search-result-card";
+
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.className = "selection-toggle";
+    toggle.innerHTML = selectedSearchUpcs.has(p.upc) ? "●" : "○";
+    toggle.onclick = (event) => {
+      event.stopPropagation();
+      toggleSearchSelection(p.upc);
+    };
+
+    const content = document.createElement("div");
+    content.className = "product-meta";
+
+    const name = document.createElement("b");
+    name.textContent = p.name;
+
+    const upc = createSearchLabel(`UPC: ${p.upc}`);
+    const info = createSearchLabel(`Price: $${p.price} | Location: ${p.location}`);
+    const supplier = createSearchLabel(`Supplier: ${p.supplier} | Cost: $${p.cost}`);
+
+    content.appendChild(name);
+    content.appendChild(upc);
+    content.appendChild(info);
+    content.appendChild(supplier);
+
+    card.appendChild(toggle);
+    card.appendChild(content);
+    card.onclick = () => toggleSearchSelection(p.upc);
+
+    searchResults.appendChild(card);
+  });
+}
+
+function refreshSearchResults(){
+  renderSearchResults(currentSearchResults);
+}
+
+function toggleSearchSelection(upc){
+  if(selectedSearchUpcs.has(upc)){
+    selectedSearchUpcs.delete(upc);
+  } else {
+    selectedSearchUpcs.add(upc);
+  }
+  refreshSearchResults();
+}
+
 // 搜索产品 - 所有关键字都需要完全匹配（忽略大小写和符号）
 function searchProducts(){
   const rawKeyword = document.getElementById("search").value.trim();
   if(!rawKeyword) return alert("Please enter product name or UPC");
+
+  selectedSearchUpcs.clear();
 
   const normalize = text => String(text || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
   const keywords = rawKeyword.toLowerCase().split(/\s+/).filter(Boolean);
@@ -412,13 +570,11 @@ function searchProducts(){
       const fields = [p.name, p.upc, p.location, p.supplier, p.price, p.cost].join(" ");
       const normalizedFields = normalize(fields);
 
-      // 检查所有关键字是否都存在于产品数据中
       const allMatch = keywords.every(term => {
         const normalizedTerm = normalize(term);
         return normalizedFields.includes(normalizedTerm);
       });
 
-      // 如果所有关键字都匹配，返回该产品
       return { ...p, match: allMatch };
     })
     .filter(p => p.match)
@@ -429,22 +585,24 @@ function searchProducts(){
     return;
   }
 
-  const resultsHtml = results.map((p) => {
-    return '<div style="padding:10px; border:1px solid #ddd; margin:10px 0; border-radius:5px; cursor:pointer;" onclick="addFromSearch(\'' + p.upc + '\')">' +
-      '<b>' + p.name + '</b><br>' +
-      'UPC: ' + p.upc + '<br>' +
-      'Price: $' + p.price + ' | Location: ' + p.location + '<br>' +
-      'Supplier: ' + p.supplier + ' | Cost: $' + p.cost +
-    '</div>';
-  }).join("");
-
-  document.getElementById("searchResults").innerHTML = resultsHtml;
+  renderSearchResults(results);
   document.getElementById("searchPopup").style.display = "block";
 }
 
-function addFromSearch(upc){
-  if(!scanMap[upc]) scanMap[upc] = {...db[upc], qty:0};
-  scanMap[upc].qty++;
+function addSelectedFromSearch(){
+  if(selectedSearchUpcs.size === 0){
+    alert("Please select at least one product.");
+    return;
+  }
+
+  selectedSearchUpcs.forEach(upc => {
+    const p = db[upc];
+    if(!p) return;
+
+    if(!scanMap[upc]) scanMap[upc] = {...p, qty:0};
+    scanMap[upc].qty++;
+  });
+
   renderList();
   closeSearch();
   document.getElementById("search").value = "";
@@ -503,7 +661,6 @@ function showActionPopup(p){
   $${p.price} | ${p.location}<br>
   ${p.supplier} | $${p.cost}
   `;
-  // populate qty input
   const qtyInput = document.getElementById('action_qty');
   if(qtyInput) qtyInput.value = p.qty || 0;
   actionPopup.style.display="block";
@@ -527,7 +684,6 @@ function setItemQty(){
   if(isNaN(v) || v < 0) return alert('Enter a valid quantity');
   if(!currentItem) return;
   if(v === 0){
-    // remove if zero
     delete scanMap[currentItem.upc];
   } else {
     if(!scanMap[currentItem.upc]) scanMap[currentItem.upc] = {...db[currentItem.upc], qty:0};
@@ -590,10 +746,13 @@ function updateProduct(){
   fetch(API,{method:"POST",body:JSON.stringify(data)})
   .then(()=>{
     db[data.upc]=data;
-    scanMap[data.upc]={...data,qty:scanMap[data.upc].qty};
+    if(scanMap[data.upc]){
+      scanMap[data.upc] = {...data, qty: scanMap[data.upc].qty};
+    }
     localStorage.setItem("productDB",JSON.stringify(db));
     closeEdit();
     renderList();
+    alert("updates suscessiful, please wait around 1 minute to feitch the cloud");
   });
 }
 
@@ -617,7 +776,6 @@ function exportExcel(){
     });
     const ws=XLSX.utils.aoa_to_sheet(arr);
     
-    // 自动调整列宽
     const colWidths = [];
     arr[0].forEach((_, colIdx) => {
       let maxLen = arr[0][colIdx].toString().length;
