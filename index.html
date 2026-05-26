@@ -108,6 +108,42 @@ input:focus {
   padding-left:15px;
 }
 
+.item-row {
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:16px;
+}
+
+.item-content {
+  flex:1;
+  min-width:0;
+}
+
+.item-meta {
+  display:grid;
+  grid-template-columns:repeat(2, minmax(0, max-content));
+  gap:6px 18px;
+  font-size:14px;
+  color:#555;
+  margin-top:8px;
+}
+
+.qty-input {
+  width:80px;
+  padding:10px 12px;
+  font-size:16px;
+  border:2px solid #E5DDF5;
+  border-radius:8px;
+  box-sizing:border-box;
+}
+
+.qty-input:focus {
+  outline:none;
+  border-color:#6B4C9A;
+  box-shadow:0 0 8px rgba(107, 76, 154, 0.2);
+}
+
 .search-result-card {
   position:relative;
   padding:12px 12px 12px 52px;
@@ -294,14 +330,16 @@ h3 {
 
 <!-- 搜索结果 -->
 <div id="searchPopup" style="display:none; position:fixed; top:10%; left:5%; width:90%; background:white; padding:20px; border-radius:10px; z-index:999; max-height:70vh; overflow-y:auto;">
-<div style="position:sticky; top:0; background:white; z-index:1000; display:flex; justify-content:flex-start; align-items:center; gap:10px; margin:-20px -20px 10px -20px; padding:10px 20px; border-bottom:1px solid #eee; border-radius:10px 10px 0 0;">
-  <button onclick="closeSearch()" style="width:auto; padding:10px 16px; font-size:40px; background:none; border:none; cursor:pointer; color:#999; margin:0; line-height:1;">×</button>
-  <h3 style="margin:0;">Search Results</h3>
+<div style="position:sticky; top:0; background:white; z-index:1000; display:flex; justify-content:space-between; align-items:center; gap:10px; margin:-20px -20px 10px -20px; padding:12px 20px; border-bottom:1px solid #eee; border-radius:10px 10px 0 0;">
+  <button onclick="addSelectedFromSearch()" style="width:auto; padding:10px 16px; font-size:16px; background:linear-gradient(135deg, #6B4C9A 0%, #7B68BE 100%); color:#fff; border:none; border-radius:8px; cursor:pointer;">ADD</button>
+  <div style="display:flex; align-items:center; gap:10px;">
+    <button onclick="closeSearch()" style="width:auto; padding:10px 16px; font-size:32px; background:none; border:none; cursor:pointer; color:#999; margin:0; line-height:1;">×</button>
+    <h3 style="margin:0;">Search Results</h3>
+  </div>
 </div>
 <div id="searchResults"></div>
-<div style="position:sticky; bottom:0; background:white; padding-top:12px; display:flex; gap:10px; align-items:center;">
-  <button onclick="addSelectedFromSearch()" style="width:auto; padding:12px 18px; margin:0;">ADD</button>
-  <button onclick="closeSearch()" style="flex:1; margin:0;">Close</button>
+<div style="position:sticky; bottom:0; background:white; padding:14px 0 0; display:flex; justify-content:flex-end; gap:10px;">
+  <button onclick="closeSearch()" style="flex:1; margin:0; padding:12px 18px;">Close</button>
 </div>
 </div>
 
@@ -639,13 +677,40 @@ function renderList(){
     d.className="item";
 
     d.innerHTML=`
-      <b>${p.name}</b> <span class="badge">${p.qty} cs</span><br>
-      UPC: ${p.upc}<br>
-      Price: $${p.price}<br>
-      Loc: ${p.location}<br>
-      Supplier: ${p.supplier}<br>
-      Cost: $${p.cost}
+      <div class="item-row">
+        <div class="item-content">
+          <b>${p.name}</b>
+          <div class="item-meta">
+            <span>UPC: ${p.upc}</span>
+            <span>Price: $${p.price}</span>
+            <span>Loc: ${p.location}</span>
+            <span>Supplier: ${p.supplier}</span>
+            <span>Cost: $${p.cost}</span>
+          </div>
+        </div>
+        <div style="display:flex; flex-direction:column; align-items:flex-end; gap:8px;">
+          <label style="font-size:13px; color:#555;">Qty</label>
+          <input class="qty-input" data-upc="${p.upc}" type="number" min="0" value="${p.qty}" />
+        </div>
+      </div>
     `;
+
+    const qtyInput = d.querySelector('.qty-input');
+    if(qtyInput){
+      qtyInput.addEventListener('click', e => e.stopPropagation());
+      qtyInput.addEventListener('change', e => {
+        e.stopPropagation();
+        const value = parseInt(e.target.value || '0', 10);
+        if(isNaN(value) || value < 0) return;
+        if(value === 0){
+          delete scanMap[p.upc];
+        } else {
+          if(!scanMap[p.upc]) scanMap[p.upc] = {...db[p.upc], qty:0};
+          scanMap[p.upc].qty = value;
+        }
+        renderList();
+      });
+    }
 
     d.onclick=()=>showActionPopup(p);
     list.appendChild(d);
