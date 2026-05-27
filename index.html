@@ -290,8 +290,18 @@ h3 {
 </div>
 
 <div class="card">
-  <button onclick="syncInfo()" class="sync-info-btn">🔁 Sync Info</button>
+  <button onclick="syncInfo()" class="sync-info-btn">🔖 Mark to supplier</button>
   <button onclick="exportExcel()">📦 Export Excel</button>
+</div>
+
+<!-- Mark to Supplier 弹窗 -->
+<div id="markSupplierPopup" style="display:none; position:fixed; top:15%; left:5%; width:90%; background:white; padding:20px; border-radius:12px; z-index:999; box-shadow:0 10px 40px rgba(0,0,0,0.15);">
+  <h3>Mark To Supplier</h3>
+  <input id="markSupplierName" placeholder="Supplier name" style="width:100%; padding:14px; font-size:18px; border:2px solid #E5DDF5; border-radius:8px; box-sizing:border-box; margin-top:14px;" />
+  <div style="margin-top:18px; display:flex; gap:10px;">
+    <button onclick="saveMarkSupplier()" style="flex:1; width:auto;">Save</button>
+    <button onclick="closeSupplierDialog()" style="flex:1; width:auto; background:#ccc; color:#333;">Cancel</button>
+  </div>
 </div>
 
 <!-- 新产品 -->
@@ -428,13 +438,63 @@ function syncData() {
 }
 
 function syncInfo(){
-  statusEl.innerText = "Syncing Info...";
-  syncCatalogData()
-  .then(()=>{
-    statusEl.innerHTML = 'Status: Info Synced <span class="status-dot"></span>';
-  })
-  .catch(()=>{
-    statusEl.innerText = "Status: Sync Failed";
+  openSupplierDialog();
+}
+
+function openSupplierDialog(){
+  document.getElementById('markSupplierName').value = '';
+  document.getElementById('markSupplierPopup').style.display = 'block';
+}
+
+function closeSupplierDialog(){
+  document.getElementById('markSupplierPopup').style.display = 'none';
+}
+
+function saveMarkSupplier(){
+  const supplierName = document.getElementById('markSupplierName').value.trim();
+  if(!supplierName){
+    alert('Supplier name is empty. No changes were made.');
+    closeSupplierDialog();
+    return;
+  }
+
+  const items = Object.values(scanMap);
+  if(items.length === 0){
+    alert('No products in the list to mark.');
+    closeSupplierDialog();
+    return;
+  }
+
+  const updateRequests = items.map(p => {
+    const data = {
+      action: 'update',
+      upc: p.upc,
+      name: p.name,
+      price: p.price,
+      location: p.location,
+      supplier: supplierName,
+      cost: p.cost
+    };
+
+    db[p.upc] = {...data};
+    scanMap[p.upc] = {...data, qty: p.qty};
+
+    return fetch(API, {method: 'POST', body: JSON.stringify(data)})
+      .then(resp => {
+        if(!resp.ok) throw new Error('Update failed');
+        return resp.text();
+      })
+      .catch(() => null);
+  });
+
+  Promise.allSettled(updateRequests).then(() => {
+    localStorage.setItem('productDB', JSON.stringify(db));
+    renderList();
+    closeSupplierDialog();
+    statusEl.innerHTML = `Status: Marked ${items.length} products to ${supplierName} <span class="status-dot"></span>`;
+  }).catch(() => {
+    statusEl.innerText = 'Status: Mark supplier failed';
+    closeSupplierDialog();
   });
 }
 
