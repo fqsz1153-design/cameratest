@@ -2,6 +2,7 @@
 <html>
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>FreshPro System PRO</title>
 
 <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
@@ -124,9 +125,15 @@ input:focus {
   display:grid;
   grid-template-columns:repeat(2, minmax(0, max-content));
   gap:6px 18px;
-  font-size:14px;
+  font-size:18px;
   color:#555;
   margin-top:8px;
+}
+
+.item-content > b {
+  font-size:20px;
+  display:block;
+  margin-bottom:6px;
 }
 
 .qty-input {
@@ -173,7 +180,7 @@ input:focus {
   display:flex;
   flex-direction:column;
   gap:4px;
-  font-size:14px;
+  font-size:18px;
   color:#444;
 }
 
@@ -689,7 +696,7 @@ function renderList(){
           </div>
         </div>
         <div style="display:flex; flex-direction:column; align-items:flex-end; gap:8px;">
-          <label style="font-size:13px; color:#555;">Qty</label>
+          <label style="font-size:17px; color:#555;">Qty</label>
           <input class="qty-input" data-upc="${p.upc}" type="number" min="0" value="${p.qty}" />
         </div>
       </div>
