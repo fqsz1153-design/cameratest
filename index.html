@@ -292,6 +292,17 @@ h3 {
 <div class="card">
   <button onclick="syncInfo()" class="sync-info-btn">🔖 Mark to supplier</button>
   <button onclick="exportExcel()">📦 Export Excel</button>
+  <button onclick="openClearDialog()" style="background:linear-gradient(135deg,#ef4444 0%,#f87171 100%); margin-top:10px;">🧹 Clear List</button>
+</div>
+
+<!-- Clear list confirmation弹窗 -->
+<div id="clearConfirmPopup" style="display:none; position:fixed; top:30%; left:5%; width:90%; background:white; padding:20px; border-radius:12px; z-index:10001; box-shadow:0 10px 40px rgba(0,0,0,0.15);">
+  <h3>Confirm Clear</h3>
+  <p style="color:#555;">Are you sure you want to clear the current list?</p>
+  <div style="margin-top:18px; display:flex; gap:10px;">
+    <button onclick="clearListConfirmed()" style="flex:1; background:linear-gradient(135deg,#ef4444 0%,#f87171 100%);">Yes</button>
+    <button onclick="closeClearDialog()" style="flex:1; background:#ccc; color:#333;">Cancel</button>
+  </div>
 </div>
 
 <!-- Mark to Supplier 弹窗 -->
@@ -388,6 +399,7 @@ function verifyPassword(){
     document.getElementById("loginPopup").style.display = "none";
     document.getElementById("passwordInput").value = "";
     loadLocalDB();
+    loadScanMap();
   } else {
     alert("Incorrect password!");
     document.getElementById("passwordInput").value = "";
@@ -503,6 +515,18 @@ function loadLocalDB(){
   if(d){
     db = JSON.parse(d);
     statusEl.innerText = "⚡ Local Mode";
+  }
+}
+
+function saveScanMap(){
+  try{ localStorage.setItem('scanMap', JSON.stringify(scanMap)); } catch(e){}
+}
+
+function loadScanMap(){
+  const d = localStorage.getItem('scanMap');
+  if(d){
+    try{ scanMap = JSON.parse(d) || {}; } catch(e){ scanMap = {}; }
+    renderList();
   }
 }
 
@@ -782,6 +806,7 @@ function renderList(){
     d.onclick=()=>showActionPopup(p);
     list.appendChild(d);
   });
+  saveScanMap();
 }
 
 // Action
@@ -823,6 +848,24 @@ function setItemQty(){
   }
   closeAction();
   renderList();
+}
+
+function openClearDialog(){
+  const keys = Object.keys(scanMap);
+  if(keys.length === 0) return alert('List is already empty.');
+  document.getElementById('clearConfirmPopup').style.display = 'block';
+}
+
+function closeClearDialog(){
+  document.getElementById('clearConfirmPopup').style.display = 'none';
+}
+
+function clearListConfirmed(){
+  scanMap = {};
+  try{ localStorage.removeItem('scanMap'); }catch(e){}
+  renderList();
+  statusEl.innerText = 'List cleared';
+  closeClearDialog();
 }
 
 // 新产品
@@ -924,7 +967,7 @@ function exportExcel(){
 
   const now = new Date();
   const pad = num => String(num).padStart(2, "0");
-  const fileName = `7333 Goreway ${pad(now.getDate())}/${pad(now.getMonth()+1)}/${now.getFullYear()}/ ${pad(now.getHours())}.xlsx`;
+  const fileName = `678 Markham Rd Jian Hing ${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}.xlsx`;
   XLSX.writeFile(wb, fileName);
 }
 
