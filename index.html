@@ -6,6 +6,7 @@
 <title>FreshPro System PRO</title>
 
 <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
 
 <style>
 body { 
@@ -374,6 +375,14 @@ h3 {
 <script>
 
 const API = "https://script.google.com/macros/s/AKfycbw8n_Yd8g0hY5UOQQlFLpuowfc35a0wtLCI1ac9k-46TVDB20iPtR9nXieb9tFQE5QNtQ/exec";
+// 这个密钥要和 Apps Script 里 Script Properties 里设置的 API_TOKEN 完全一致
+// 换成你自己生成的一长串随机字符串，不要用示例里的这个
+const API_TOKEN = "678m";
+
+// 读取（搜索/扫描）走这个发布到网络的 CSV 链接，速度更快、体验更好
+// Google Sheet → 文件 → 分享 → 发布到网络 → 选中对应分页 → 格式选 CSV → 把链接粘到下面
+// 列顺序需要跟 syncCatalogData() 里的映射一致：name, upc, price, location, supplier, cost
+const CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQoB8gGX8SOtTIE-v5GjdZkPHga-1N1gHz7MsNfk-L4VVHbipmUYDKURUxBT8Cuy_gmOhImOPui3ltN/pub?gid=0&single=true&output=csv";
 
 let db = {};
 let scanMap = {};
@@ -407,12 +416,21 @@ function verifyPassword(){
 }
 
 async function syncCatalogData(){
-  const response = await fetch(API);
+  if(CSV_URL.includes("PASTE_YOUR_PUBLISHED_CSV_URL_HERE")){
+    throw new Error("CSV_URL not configured");
+  }
+
+  const response = await fetch(CSV_URL, {cache: "no-store"});
   if(!response.ok) throw new Error("sync failed");
 
-  const data = await response.json();
+  const text = await response.text();
+  const parsed = Papa.parse(text, {skipEmptyLines: true});
+  // 第一行是表头，跳过；每行顺序：name, upc, price, location, supplier, cost
+  const rows = parsed.data.slice(1);
+
   db = {};
-  data.forEach(row=>{
+  rows.forEach(row=>{
+    if(!row[1]) return; // 没有 upc 的行跳过
     db[row[1]] = {
       name: row[0],
       upc: row[1],
@@ -485,7 +503,8 @@ function saveMarkSupplier(){
       price: p.price,
       location: p.location,
       supplier: supplierName,
-      cost: p.cost
+      cost: p.cost,
+      token: API_TOKEN
     };
 
     db[p.upc] = {...data};
@@ -883,7 +902,8 @@ function saveNewProduct(){
     price:new_price.value,
     location:new_location.value,
     supplier:new_supplier.value,
-    cost:new_cost.value
+    cost:new_cost.value,
+    token:API_TOKEN
   };
 
   fetch(API,{method:"POST",body:JSON.stringify(data)})
@@ -915,7 +935,8 @@ function updateProduct(){
     price:edit_price.value,
     location:edit_location.value,
     supplier:edit_supplier.value,
-    cost:edit_cost.value
+    cost:edit_cost.value,
+    token:API_TOKEN
   };
 
   fetch(API,{method:"POST",body:JSON.stringify(data)})
