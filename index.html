@@ -7,6 +7,8 @@
 
 <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<!-- ZXing-js：纯 JS 条码解码库，兼容 iOS Safari / Android Chrome 等所有主流浏览器 -->
+<script src="https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js"></script>
 
 <style>
 body { 
@@ -238,6 +240,23 @@ h3 {
   color:#6B4C9A;
   margin-top:0;
 }
+
+.scan-frame {
+  position:relative;
+}
+
+.scan-frame::after {
+  content:"";
+  position:absolute;
+  left:10%;
+  right:10%;
+  top:35%;
+  height:30%;
+  border:2px solid #FFD54A;
+  border-radius:6px;
+  box-shadow:0 0 0 999px rgba(0,0,0,0.25);
+  pointer-events:none;
+}
 </style>
 </head>
 
@@ -274,7 +293,9 @@ h3 {
   <input id="barcode" placeholder="Scan UPC" onkeypress="handleEnter(event)" autofocus />
   <button onclick="startCameraScan()">📷 Scan Barcode by Camera</button>
   <div id="cameraScanPanel" style="display:none; margin-top:12px;">
-    <video id="cameraVideo" autoplay playsinline style="width:100%; max-height:320px; background:#000; border-radius:8px; object-fit:cover;"></video>
+    <div class="scan-frame">
+      <video id="cameraVideo" autoplay playsinline muted style="width:100%; max-height:320px; background:#000; border-radius:8px; object-fit:cover; display:block;"></video>
+    </div>
     <p id="cameraStatus" style="margin:10px 0 0; color:#555; font-size:14px;">Point your camera at a barcode.</p>
     <button onclick="stopCameraScan()" style="margin-top:10px;">Stop Camera</button>
   </div>
@@ -388,10 +409,10 @@ let db = {};
 let scanMap = {};
 let currentItem = null;
 let isAuthenticated = false;
-let cameraStream = null;
 let cameraScanActive = false;
-let cameraFrameId = null;
-let barcodeDetector = null;
+let zxingReader = null;          // ZXing BrowserMultiFormatReader 实例，跨浏览器复用
+let lastDecodedValue = "";
+let lastDecodedAt = 0;
 let selectedSearchUpcs = new Set();
 let currentSearchResults = [];
 const PASSWORD = "7333";
@@ -557,24 +578,36 @@ function handleSearchEnter(e){
   if(e.key==="Enter") searchProducts();
 }
 
-function stopCameraScan(){
-  cameraScanActive = false;
-  if(cameraFrameId) {
-    cancelAnimationFrame(cameraFrameId);
-    cameraFrameId = null;
+/* ============================================================
+   摄像头扫码：使用 ZXing-js（纯 JS 解码，不依赖浏览器原生
+   BarcodeDetector API），因此在 iOS Safari 和 Android Chrome /
+   国产浏览器上都能正常工作。
+   ============================================================ */
+
+function getZxingReader(){
+  if(zxingReader) return zxingReader;
+
+  if(typeof ZXing === "undefined"){
+    throw new Error("ZXing library failed to load");
   }
 
-  if(cameraStream) {
-    cameraStream.getTracks().forEach(track => track.stop());
-    cameraStream = null;
-  }
+  // 只识别超市场景常见的条码格式，减少误识别、提升速度
+  const formats = [
+    ZXing.BarcodeFormat.UPC_A,
+    ZXing.BarcodeFormat.UPC_E,
+    ZXing.BarcodeFormat.EAN_13,
+    ZXing.BarcodeFormat.EAN_8,
+    ZXing.BarcodeFormat.CODE_128,
+    ZXing.BarcodeFormat.CODE_39,
+    ZXing.BarcodeFormat.QR_CODE
+  ];
 
-  if(cameraVideo) {
-    cameraVideo.srcObject = null;
-  }
+  const hints = new Map();
+  hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, formats);
+  hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
 
-  cameraScanPanel.style.display = "none";
-  cameraStatus.innerText = "";
+  zxingReader = new ZXing.BrowserMultiFormatReader(hints, 300 /* ms between decode attempts */);
+  return zxingReader;
 }
 
 async function startCameraScan(){
@@ -589,58 +622,85 @@ async function startCameraScan(){
     return;
   }
 
-  if(!("BarcodeDetector" in window)){
-    alert("Camera scanning is not supported on this browser. Please use the barcode input or update your browser.");
+  let reader;
+  try{
+    reader = getZxingReader();
+  } catch(e){
+    alert("Barcode scanner failed to load. Please check your internet connection and try again.");
     return;
   }
 
-  if(!barcodeDetector){
-    barcodeDetector = new BarcodeDetector({
-      formats: ["ean_13", "ean_8", "upc_a", "upc_e", "code_128", "code_39", "qr_code"]
-    });
-  }
+  cameraScanPanel.style.display = "block";
+  cameraScanActive = true;
+  lastDecodedValue = "";
+  lastDecodedAt = 0;
+  cameraStatus.innerText = "Requesting camera access...";
 
-  try {
-    cameraStatus.innerText = "Requesting camera access...";
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: {
-        facingMode: { ideal: "environment" }
-      }
-    });
+  // constraints 里优先请求后置摄像头，iOS/Android 通用写法
+  const constraints = {
+    video: {
+      facingMode: { ideal: "environment" },
+      width: { ideal: 1280 },
+      height: { ideal: 720 }
+    }
+  };
 
-    cameraStream = stream;
-    cameraVideo.srcObject = stream;
-    cameraScanPanel.style.display = "block";
-    cameraScanActive = true;
-    cameraStatus.innerText = "Point your camera at a barcode.";
-
-    const detectLoop = async () => {
+  try{
+    // decodeFromConstraints 内部会调用 getUserMedia、把流接到 video 上，
+    // 并持续解码，检测到结果或出错时都会回调
+    await reader.decodeFromConstraints(constraints, cameraVideo, (result, err) => {
       if(!cameraScanActive) return;
 
-      try {
-        const detections = await barcodeDetector.detect(cameraVideo);
-        if(detections.length > 0){
-          const value = String(detections[0].rawValue || "").trim();
-          if(value){
-            cameraStatus.innerText = `Detected: ${value}`;
-            barcode.value = value;
-            stopCameraScan();
-            scanProduct();
-            return;
-          }
+      if(result){
+        const value = String(result.getText() || "").trim();
+        const now = Date.now();
+        // 简单防抖：避免同一帧连续多次触发同一个码
+        if(value && (value !== lastDecodedValue || now - lastDecodedAt > 1200)){
+          lastDecodedValue = value;
+          lastDecodedAt = now;
+          cameraStatus.innerText = `Detected: ${value}`;
+          barcode.value = value;
+          stopCameraScan();
+          scanProduct();
         }
-      } catch(error) {
-        cameraStatus.innerText = "Scanning failed. Please try again.";
+        return;
       }
 
-      cameraFrameId = requestAnimationFrame(detectLoop);
-    };
+      // err 在没扫到码的每一帧都会触发（NotFoundException 等），属正常现象，忽略即可
+      if(err && err.name && err.name !== "NotFoundException" && err.name !== "ChecksumException" && err.name !== "FormatException"){
+        console.warn("ZXing decode error:", err);
+      }
+    });
 
-    cameraFrameId = requestAnimationFrame(detectLoop);
-  } catch(error) {
+    cameraStatus.innerText = "Point your camera at a barcode.";
+  } catch(error){
+    console.error(error);
     cameraStatus.innerText = "Camera permission denied or unavailable.";
     alert("Unable to access your camera. Please allow camera access or use the barcode input.");
+    cameraScanActive = false;
+    cameraScanPanel.style.display = "none";
   }
+}
+
+function stopCameraScan(){
+  cameraScanActive = false;
+
+  if(zxingReader){
+    try{ zxingReader.reset(); } catch(e){ /* ignore */ }
+  }
+
+  if(cameraVideo){
+    try{
+      const stream = cameraVideo.srcObject;
+      if(stream && stream.getTracks){
+        stream.getTracks().forEach(track => track.stop());
+      }
+    } catch(e){ /* ignore */ }
+    cameraVideo.srcObject = null;
+  }
+
+  cameraScanPanel.style.display = "none";
+  cameraStatus.innerText = "";
 }
 
 function createSearchLabel(text){
