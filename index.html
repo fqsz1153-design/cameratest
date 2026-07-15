@@ -584,14 +584,19 @@ function getHtml5QrCode(){
   }
 
   html5QrCode = new Html5Qrcode("cameraReaderDiv", {
-    // 只识别超市场景常见的条码格式，减少误识别、提升速度
+    // 覆盖超市/仓库场景可能出现的一维码格式，含 UPC/EAN 标准格式，
+    // 以及部分供应商内部标签常用的 ITF / Codabar / Code93
     formatsToSupport: [
       Html5QrcodeSupportedFormats.UPC_A,
       Html5QrcodeSupportedFormats.UPC_E,
+      Html5QrcodeSupportedFormats.UPC_EAN_EXTENSION,
       Html5QrcodeSupportedFormats.EAN_13,
       Html5QrcodeSupportedFormats.EAN_8,
       Html5QrcodeSupportedFormats.CODE_128,
       Html5QrcodeSupportedFormats.CODE_39,
+      Html5QrcodeSupportedFormats.CODE_93,
+      Html5QrcodeSupportedFormats.ITF,
+      Html5QrcodeSupportedFormats.CODABAR,
       Html5QrcodeSupportedFormats.QR_CODE
     ],
     verbose: false
@@ -794,20 +799,82 @@ function closeSearch(){
   document.getElementById("searchPopup").style.display = "none";
 }
 
+/* ============================================================
+   UPC 位数归一化：有些产品在数据库里只存了 10 位核心数字，
+   但摄像头/扫码枪实际吐出来的是标准 11/12/13 位编码（多了系统位
+   和/或校验位）。这里在原始码之外，再生成几种常见的等价形式，
+   依次去数据库里找，命中就用命中的那个 key。
+   ============================================================ */
+function upcLookupCandidates(rawCode){
+  const code = String(rawCode || "").replace(/[^0-9]/g, "");
+  const candidates = [code];
+
+  // 12 位标准 UPC-A：首位系统码 + 10 位数据 + 末位校验码
+  // -> 去掉首尾，得到 10 位核心数字
+  if(code.length === 12){
+    candidates.push(code.slice(1, 11));   // 10 位（去系统位+校验位）
+    candidates.push(code.slice(0, 11));   // 11 位（去校验位）
+  }
+
+  // 13 位 EAN-13，如果是以 0 开头，其实是 UPC-A 前面补了个 0
+  if(code.length === 13 && code.charAt(0) === "0"){
+    const upcA = code.slice(1); // 还原成 12 位 UPC-A
+    candidates.push(upcA);
+    candidates.push(upcA.slice(1, 11));
+    candidates.push(upcA.slice(0, 11));
+  }
+
+  // 11 位（系统位+10位数据，没有校验码）-> 去掉系统位就是 10 位核心
+  if(code.length === 11){
+    candidates.push(code.slice(1));
+  }
+
+  // 10 位核心数字：反过来试着拼出 11/12 位，兼容数据库里存的是完整 UPC 的情况
+  if(code.length === 10){
+    const withSystem = "0" + code;             // 11 位：系统位 0 + 10 位数据
+    candidates.push(withSystem);
+    candidates.push(withSystem + upcCheckDigit(withSystem)); // 12 位完整 UPC-A
+  }
+
+  // 去重，保留原始顺序（原始扫描码优先）
+  return [...new Set(candidates)];
+}
+
+// 标准 UPC-A 校验码算法：输入 11 位（系统位+10位数据），返回 1 位校验码
+function upcCheckDigit(elevenDigits){
+  let oddSum = 0, evenSum = 0;
+  for(let i = 0; i < 11; i++){
+    const d = parseInt(elevenDigits.charAt(i), 10) || 0;
+    if(i % 2 === 0) oddSum += d; else evenSum += d;
+  }
+  const total = oddSum * 3 + evenSum;
+  return String((10 - (total % 10)) % 10);
+}
+
+// 依次尝试原始码和归一化候选码，返回 {key, product} 或 null
+function findProductByCode(rawCode){
+  const candidates = upcLookupCandidates(rawCode);
+  for(const key of candidates){
+    if(db[key]) return {key, product: db[key]};
+  }
+  return null;
+}
+
 // 扫码
 function scanProduct(){
   const code = barcode.value.trim();
   if(!code) return;
 
-  const p = db[code];
+  const found = findProductByCode(code);
 
-  if(!p){
+  if(!found){
     if(confirm("Not found. Add?")) openPopup(code);
     return;
   }
 
-  if(!scanMap[code]) scanMap[code] = {...p, qty:0};
-  scanMap[code].qty++;
+  const { key, product } = found;
+  if(!scanMap[key]) scanMap[key] = {...product, qty:0};
+  scanMap[key].qty++;
 
   renderList();
   barcode.value="";
