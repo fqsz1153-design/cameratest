@@ -632,10 +632,18 @@ async function startCameraScan(){
   cameraStatus.innerText = "Requesting camera access...";
 
   const config = {
-    fps: 15,
-    qrbox: { width: 280, height: 140 }, // 扫描裁剪区域，对准这个框识别更快更准
+    fps: 10,
+    qrbox: { width: 300, height: 180 }, // 扫描裁剪区域，比一维码本身留够余量
     aspectRatio: 1.5,
-    disableFlip: true
+    disableFlip: true,
+    // 明确请求更高分辨率：窄条码（如 ITF/Code128）对分辨率很敏感，
+    // 默认摄像头分辨率经常不够细，加大后能明显提升识别成功率
+    videoConstraints: {
+      facingMode: { ideal: "environment" },
+      width: { ideal: 1920 },
+      height: { ideal: 1080 },
+      advanced: [{ focusMode: "continuous" }] // 部分安卓机型支持，iOS 会忽略，无副作用
+    }
   };
 
   try{
