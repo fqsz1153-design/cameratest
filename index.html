@@ -7,8 +7,8 @@
 
 <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
-<!-- ZXing-js：纯 JS 条码解码库，兼容 iOS Safari / Android Chrome 等所有主流浏览器 -->
-<script src="https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js"></script>
+<!-- html5-qrcode：条码/二维码解码库，专门处理了 iOS Safari 摄像头就绪、对焦、扫描区域裁剪等兼容性问题 -->
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
 
 <style>
 body { 
@@ -241,21 +241,15 @@ h3 {
   margin-top:0;
 }
 
-.scan-frame {
-  position:relative;
+#cameraReaderDiv {
+  width:100%;
+  border-radius:8px;
+  overflow:hidden;
+  background:#000;
 }
 
-.scan-frame::after {
-  content:"";
-  position:absolute;
-  left:10%;
-  right:10%;
-  top:35%;
-  height:30%;
-  border:2px solid #FFD54A;
-  border-radius:6px;
-  box-shadow:0 0 0 999px rgba(0,0,0,0.25);
-  pointer-events:none;
+#cameraReaderDiv video {
+  border-radius:8px;
 }
 </style>
 </head>
@@ -293,9 +287,7 @@ h3 {
   <input id="barcode" placeholder="Scan UPC" onkeypress="handleEnter(event)" autofocus />
   <button onclick="startCameraScan()">📷 Scan Barcode by Camera</button>
   <div id="cameraScanPanel" style="display:none; margin-top:12px;">
-    <div class="scan-frame">
-      <video id="cameraVideo" autoplay playsinline muted style="width:100%; max-height:320px; background:#000; border-radius:8px; object-fit:cover; display:block;"></video>
-    </div>
+    <div id="cameraReaderDiv"></div>
     <p id="cameraStatus" style="margin:10px 0 0; color:#555; font-size:14px;">Point your camera at a barcode.</p>
     <button onclick="stopCameraScan()" style="margin-top:10px;">Stop Camera</button>
   </div>
@@ -410,14 +402,13 @@ let scanMap = {};
 let currentItem = null;
 let isAuthenticated = false;
 let cameraScanActive = false;
-let zxingReader = null;          // ZXing BrowserMultiFormatReader 实例，跨浏览器复用
+let html5QrCode = null;          // html5-qrcode 实例，跨浏览器（含 iOS Safari）复用
 let lastDecodedValue = "";
 let lastDecodedAt = 0;
 let selectedSearchUpcs = new Set();
 let currentSearchResults = [];
 const PASSWORD = "7333";
 const statusEl = document.getElementById("status");
-const cameraVideo = document.getElementById("cameraVideo");
 const cameraStatus = document.getElementById("cameraStatus");
 const cameraScanPanel = document.getElementById("cameraScanPanel");
 
@@ -579,35 +570,34 @@ function handleSearchEnter(e){
 }
 
 /* ============================================================
-   摄像头扫码：使用 ZXing-js（纯 JS 解码，不依赖浏览器原生
-   BarcodeDetector API），因此在 iOS Safari 和 Android Chrome /
-   国产浏览器上都能正常工作。
+   摄像头扫码：使用 html5-qrcode（内部同样是纯 JS 解码，不依赖
+   浏览器原生 BarcodeDetector API），专门处理了 iOS Safari 上
+   摄像头就绪时机、对焦、扫描区域裁剪等兼容性问题，在 Android
+   Chrome 上速度、识别率也和原生方案接近。
    ============================================================ */
 
-function getZxingReader(){
-  if(zxingReader) return zxingReader;
+function getHtml5QrCode(){
+  if(html5QrCode) return html5QrCode;
 
-  if(typeof ZXing === "undefined"){
-    throw new Error("ZXing library failed to load");
+  if(typeof Html5Qrcode === "undefined"){
+    throw new Error("html5-qrcode library failed to load");
   }
 
-  // 只识别超市场景常见的条码格式，减少误识别、提升速度
-  const formats = [
-    ZXing.BarcodeFormat.UPC_A,
-    ZXing.BarcodeFormat.UPC_E,
-    ZXing.BarcodeFormat.EAN_13,
-    ZXing.BarcodeFormat.EAN_8,
-    ZXing.BarcodeFormat.CODE_128,
-    ZXing.BarcodeFormat.CODE_39,
-    ZXing.BarcodeFormat.QR_CODE
-  ];
+  html5QrCode = new Html5Qrcode("cameraReaderDiv", {
+    // 只识别超市场景常见的条码格式，减少误识别、提升速度
+    formatsToSupport: [
+      Html5QrcodeSupportedFormats.UPC_A,
+      Html5QrcodeSupportedFormats.UPC_E,
+      Html5QrcodeSupportedFormats.EAN_13,
+      Html5QrcodeSupportedFormats.EAN_8,
+      Html5QrcodeSupportedFormats.CODE_128,
+      Html5QrcodeSupportedFormats.CODE_39,
+      Html5QrcodeSupportedFormats.QR_CODE
+    ],
+    verbose: false
+  });
 
-  const hints = new Map();
-  hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, formats);
-  hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
-
-  zxingReader = new ZXing.BrowserMultiFormatReader(hints, 300 /* ms between decode attempts */);
-  return zxingReader;
+  return html5QrCode;
 }
 
 async function startCameraScan(){
@@ -624,7 +614,7 @@ async function startCameraScan(){
 
   let reader;
   try{
-    reader = getZxingReader();
+    reader = getHtml5QrCode();
   } catch(e){
     alert("Barcode scanner failed to load. Please check your internet connection and try again.");
     return;
@@ -636,23 +626,20 @@ async function startCameraScan(){
   lastDecodedAt = 0;
   cameraStatus.innerText = "Requesting camera access...";
 
-  // constraints 里优先请求后置摄像头，iOS/Android 通用写法
-  const constraints = {
-    video: {
-      facingMode: { ideal: "environment" },
-      width: { ideal: 1280 },
-      height: { ideal: 720 }
-    }
+  const config = {
+    fps: 15,
+    qrbox: { width: 280, height: 140 }, // 扫描裁剪区域，对准这个框识别更快更准
+    aspectRatio: 1.5,
+    disableFlip: true
   };
 
   try{
-    // decodeFromConstraints 内部会调用 getUserMedia、把流接到 video 上，
-    // 并持续解码，检测到结果或出错时都会回调
-    await reader.decodeFromConstraints(constraints, cameraVideo, (result, err) => {
-      if(!cameraScanActive) return;
-
-      if(result){
-        const value = String(result.getText() || "").trim();
+    await reader.start(
+      { facingMode: "environment" }, // 优先后置摄像头，iOS/Android 通用写法
+      config,
+      (decodedText) => {
+        if(!cameraScanActive) return;
+        const value = String(decodedText || "").trim();
         const now = Date.now();
         // 简单防抖：避免同一帧连续多次触发同一个码
         if(value && (value !== lastDecodedValue || now - lastDecodedAt > 1200)){
@@ -663,14 +650,9 @@ async function startCameraScan(){
           stopCameraScan();
           scanProduct();
         }
-        return;
-      }
-
-      // err 在没扫到码的每一帧都会触发（NotFoundException 等），属正常现象，忽略即可
-      if(err && err.name && err.name !== "NotFoundException" && err.name !== "ChecksumException" && err.name !== "FormatException"){
-        console.warn("ZXing decode error:", err);
-      }
-    });
+      },
+      () => { /* 每一帧没扫到码都会触发一次，属正常现象，忽略即可 */ }
+    );
 
     cameraStatus.innerText = "Point your camera at a barcode.";
   } catch(error){
@@ -685,18 +667,10 @@ async function startCameraScan(){
 function stopCameraScan(){
   cameraScanActive = false;
 
-  if(zxingReader){
-    try{ zxingReader.reset(); } catch(e){ /* ignore */ }
-  }
-
-  if(cameraVideo){
-    try{
-      const stream = cameraVideo.srcObject;
-      if(stream && stream.getTracks){
-        stream.getTracks().forEach(track => track.stop());
-      }
-    } catch(e){ /* ignore */ }
-    cameraVideo.srcObject = null;
+  if(html5QrCode){
+    html5QrCode.stop()
+      .then(() => { try{ html5QrCode.clear(); } catch(e){ /* ignore */ } })
+      .catch(() => { /* 可能本来就没在扫描，忽略 */ });
   }
 
   cameraScanPanel.style.display = "none";
