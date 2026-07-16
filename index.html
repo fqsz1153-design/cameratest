@@ -7,8 +7,6 @@
 
 <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
-<!-- html5-qrcode：条码/二维码解码库，专门处理了 iOS Safari 摄像头就绪、对焦、扫描区域裁剪等兼容性问题 -->
-<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
 
 <style>
 body { 
@@ -240,17 +238,6 @@ h3 {
   color:#6B4C9A;
   margin-top:0;
 }
-
-#cameraReaderDiv {
-  width:100%;
-  border-radius:8px;
-  overflow:hidden;
-  background:#000;
-}
-
-#cameraReaderDiv video {
-  border-radius:8px;
-}
 </style>
 </head>
 
@@ -287,7 +274,7 @@ h3 {
   <input id="barcode" placeholder="Scan UPC" onkeypress="handleEnter(event)" autofocus />
   <button onclick="startCameraScan()">📷 Scan Barcode by Camera</button>
   <div id="cameraScanPanel" style="display:none; margin-top:12px;">
-    <div id="cameraReaderDiv"></div>
+    <video id="cameraVideo" autoplay playsinline style="width:100%; max-height:320px; background:#000; border-radius:8px; object-fit:cover;"></video>
     <p id="cameraStatus" style="margin:10px 0 0; color:#555; font-size:14px;">Point your camera at a barcode.</p>
     <button onclick="stopCameraScan()" style="margin-top:10px;">Stop Camera</button>
   </div>
@@ -401,14 +388,15 @@ let db = {};
 let scanMap = {};
 let currentItem = null;
 let isAuthenticated = false;
+let cameraStream = null;
 let cameraScanActive = false;
-let html5QrCode = null;          // html5-qrcode 实例，跨浏览器（含 iOS Safari）复用
-let lastDecodedValue = "";
-let lastDecodedAt = 0;
+let cameraFrameId = null;
+let barcodeDetector = null;
 let selectedSearchUpcs = new Set();
 let currentSearchResults = [];
 const PASSWORD = "7333";
 const statusEl = document.getElementById("status");
+const cameraVideo = document.getElementById("cameraVideo");
 const cameraStatus = document.getElementById("cameraStatus");
 const cameraScanPanel = document.getElementById("cameraScanPanel");
 
@@ -569,40 +557,24 @@ function handleSearchEnter(e){
   if(e.key==="Enter") searchProducts();
 }
 
-/* ============================================================
-   摄像头扫码：使用 html5-qrcode（内部同样是纯 JS 解码，不依赖
-   浏览器原生 BarcodeDetector API），专门处理了 iOS Safari 上
-   摄像头就绪时机、对焦、扫描区域裁剪等兼容性问题，在 Android
-   Chrome 上速度、识别率也和原生方案接近。
-   ============================================================ */
-
-function getHtml5QrCode(){
-  if(html5QrCode) return html5QrCode;
-
-  if(typeof Html5Qrcode === "undefined"){
-    throw new Error("html5-qrcode library failed to load");
+function stopCameraScan(){
+  cameraScanActive = false;
+  if(cameraFrameId) {
+    cancelAnimationFrame(cameraFrameId);
+    cameraFrameId = null;
   }
 
-  html5QrCode = new Html5Qrcode("cameraReaderDiv", {
-    // 覆盖超市/仓库场景可能出现的一维码格式，含 UPC/EAN 标准格式，
-    // 以及部分供应商内部标签常用的 ITF / Codabar / Code93
-    formatsToSupport: [
-      Html5QrcodeSupportedFormats.UPC_A,
-      Html5QrcodeSupportedFormats.UPC_E,
-      Html5QrcodeSupportedFormats.UPC_EAN_EXTENSION,
-      Html5QrcodeSupportedFormats.EAN_13,
-      Html5QrcodeSupportedFormats.EAN_8,
-      Html5QrcodeSupportedFormats.CODE_128,
-      Html5QrcodeSupportedFormats.CODE_39,
-      Html5QrcodeSupportedFormats.CODE_93,
-      Html5QrcodeSupportedFormats.ITF,
-      Html5QrcodeSupportedFormats.CODABAR,
-      Html5QrcodeSupportedFormats.QR_CODE
-    ],
-    verbose: false
-  });
+  if(cameraStream) {
+    cameraStream.getTracks().forEach(track => track.stop());
+    cameraStream = null;
+  }
 
-  return html5QrCode;
+  if(cameraVideo) {
+    cameraVideo.srcObject = null;
+  }
+
+  cameraScanPanel.style.display = "none";
+  cameraStatus.innerText = "";
 }
 
 async function startCameraScan(){
@@ -617,77 +589,58 @@ async function startCameraScan(){
     return;
   }
 
-  let reader;
-  try{
-    reader = getHtml5QrCode();
-  } catch(e){
-    alert("Barcode scanner failed to load. Please check your internet connection and try again.");
+  if(!("BarcodeDetector" in window)){
+    alert("Camera scanning is not supported on this browser. Please use the barcode input or update your browser.");
     return;
   }
 
-  cameraScanPanel.style.display = "block";
-  cameraScanActive = true;
-  lastDecodedValue = "";
-  lastDecodedAt = 0;
-  cameraStatus.innerText = "Requesting camera access...";
+  if(!barcodeDetector){
+    barcodeDetector = new BarcodeDetector({
+      formats: ["ean_13", "ean_8", "upc_a", "upc_e", "code_128", "code_39", "qr_code"]
+    });
+  }
 
-  const config = {
-    fps: 10,
-    qrbox: { width: 300, height: 180 }, // 扫描裁剪区域，比一维码本身留够余量
-    aspectRatio: 1.5,
-    disableFlip: true,
-    // 明确请求更高分辨率：窄条码（如 ITF/Code128）对分辨率很敏感，
-    // 默认摄像头分辨率经常不够细，加大后能明显提升识别成功率
-    videoConstraints: {
-      facingMode: { ideal: "environment" },
-      width: { ideal: 1920 },
-      height: { ideal: 1080 },
-      advanced: [{ focusMode: "continuous" }] // 部分安卓机型支持，iOS 会忽略，无副作用
-    }
-  };
+  try {
+    cameraStatus.innerText = "Requesting camera access...";
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        facingMode: { ideal: "environment" }
+      }
+    });
 
-  try{
-    await reader.start(
-      { facingMode: "environment" }, // 优先后置摄像头，iOS/Android 通用写法
-      config,
-      (decodedText) => {
-        if(!cameraScanActive) return;
-        const value = String(decodedText || "").trim();
-        const now = Date.now();
-        // 简单防抖：避免同一帧连续多次触发同一个码
-        if(value && (value !== lastDecodedValue || now - lastDecodedAt > 1200)){
-          lastDecodedValue = value;
-          lastDecodedAt = now;
-          cameraStatus.innerText = `Detected: ${value}`;
-          barcode.value = value;
-          stopCameraScan();
-          scanProduct();
-        }
-      },
-      () => { /* 每一帧没扫到码都会触发一次，属正常现象，忽略即可 */ }
-    );
-
+    cameraStream = stream;
+    cameraVideo.srcObject = stream;
+    cameraScanPanel.style.display = "block";
+    cameraScanActive = true;
     cameraStatus.innerText = "Point your camera at a barcode.";
-  } catch(error){
-    console.error(error);
+
+    const detectLoop = async () => {
+      if(!cameraScanActive) return;
+
+      try {
+        const detections = await barcodeDetector.detect(cameraVideo);
+        if(detections.length > 0){
+          const value = String(detections[0].rawValue || "").trim();
+          if(value){
+            cameraStatus.innerText = `Detected: ${value}`;
+            barcode.value = value;
+            stopCameraScan();
+            scanProduct();
+            return;
+          }
+        }
+      } catch(error) {
+        cameraStatus.innerText = "Scanning failed. Please try again.";
+      }
+
+      cameraFrameId = requestAnimationFrame(detectLoop);
+    };
+
+    cameraFrameId = requestAnimationFrame(detectLoop);
+  } catch(error) {
     cameraStatus.innerText = "Camera permission denied or unavailable.";
     alert("Unable to access your camera. Please allow camera access or use the barcode input.");
-    cameraScanActive = false;
-    cameraScanPanel.style.display = "none";
   }
-}
-
-function stopCameraScan(){
-  cameraScanActive = false;
-
-  if(html5QrCode){
-    html5QrCode.stop()
-      .then(() => { try{ html5QrCode.clear(); } catch(e){ /* ignore */ } })
-      .catch(() => { /* 可能本来就没在扫描，忽略 */ });
-  }
-
-  cameraScanPanel.style.display = "none";
-  cameraStatus.innerText = "";
 }
 
 function createSearchLabel(text){
@@ -807,82 +760,20 @@ function closeSearch(){
   document.getElementById("searchPopup").style.display = "none";
 }
 
-/* ============================================================
-   UPC 位数归一化：有些产品在数据库里只存了 10 位核心数字，
-   但摄像头/扫码枪实际吐出来的是标准 11/12/13 位编码（多了系统位
-   和/或校验位）。这里在原始码之外，再生成几种常见的等价形式，
-   依次去数据库里找，命中就用命中的那个 key。
-   ============================================================ */
-function upcLookupCandidates(rawCode){
-  const code = String(rawCode || "").replace(/[^0-9]/g, "");
-  const candidates = [code];
-
-  // 12 位标准 UPC-A：首位系统码 + 10 位数据 + 末位校验码
-  // -> 去掉首尾，得到 10 位核心数字
-  if(code.length === 12){
-    candidates.push(code.slice(1, 11));   // 10 位（去系统位+校验位）
-    candidates.push(code.slice(0, 11));   // 11 位（去校验位）
-  }
-
-  // 13 位 EAN-13，如果是以 0 开头，其实是 UPC-A 前面补了个 0
-  if(code.length === 13 && code.charAt(0) === "0"){
-    const upcA = code.slice(1); // 还原成 12 位 UPC-A
-    candidates.push(upcA);
-    candidates.push(upcA.slice(1, 11));
-    candidates.push(upcA.slice(0, 11));
-  }
-
-  // 11 位（系统位+10位数据，没有校验码）-> 去掉系统位就是 10 位核心
-  if(code.length === 11){
-    candidates.push(code.slice(1));
-  }
-
-  // 10 位核心数字：反过来试着拼出 11/12 位，兼容数据库里存的是完整 UPC 的情况
-  if(code.length === 10){
-    const withSystem = "0" + code;             // 11 位：系统位 0 + 10 位数据
-    candidates.push(withSystem);
-    candidates.push(withSystem + upcCheckDigit(withSystem)); // 12 位完整 UPC-A
-  }
-
-  // 去重，保留原始顺序（原始扫描码优先）
-  return [...new Set(candidates)];
-}
-
-// 标准 UPC-A 校验码算法：输入 11 位（系统位+10位数据），返回 1 位校验码
-function upcCheckDigit(elevenDigits){
-  let oddSum = 0, evenSum = 0;
-  for(let i = 0; i < 11; i++){
-    const d = parseInt(elevenDigits.charAt(i), 10) || 0;
-    if(i % 2 === 0) oddSum += d; else evenSum += d;
-  }
-  const total = oddSum * 3 + evenSum;
-  return String((10 - (total % 10)) % 10);
-}
-
-// 依次尝试原始码和归一化候选码，返回 {key, product} 或 null
-function findProductByCode(rawCode){
-  const candidates = upcLookupCandidates(rawCode);
-  for(const key of candidates){
-    if(db[key]) return {key, product: db[key]};
-  }
-  return null;
-}
-
 // 扫码
 function scanProduct(){
   const code = barcode.value.trim();
   if(!code) return;
 
-  const found = findProductByCode(code);
+  const p = db[code];
 
-  if(!found){
+  if(!p){
     if(confirm("Not found. Add?")) openPopup(code);
     return;
   }
 
-  const { key, product } = found;
-  if(!scanMap[key]) scanMap[key] = {...product, qty:0};
-  scanMap[key].qty++;
+  if(!scanMap[code]) scanMap[code] = {...p, qty:0};
+  scanMap[code].qty++;
 
   renderList();
   barcode.value="";
