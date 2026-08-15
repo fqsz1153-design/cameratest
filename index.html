@@ -17,6 +17,7 @@ body {
 }
 
 header {
+  position:relative;
   background:linear-gradient(135deg, #6B4C9A 0%, #7B68BE 100%);
   padding:20px;
   border-radius:12px;
@@ -49,6 +50,43 @@ header p {
   font-size:13px;
   opacity:0.9;
   letter-spacing:2px;
+}
+
+.sync-status-indicator {
+  position:absolute;
+  right:16px;
+  bottom:11px;
+  display:flex;
+  align-items:center;
+  gap:7px;
+  font-size:12px;
+  font-weight:600;
+  letter-spacing:0;
+  color:rgba(255,255,255,0.94);
+}
+
+.sync-status-dot {
+  width:10px;
+  height:10px;
+  flex:0 0 10px;
+  border-radius:50%;
+  background:#ef4444;
+}
+
+.sync-status-dot.is-synced {
+  background:#22c55e;
+}
+
+.visually-hidden {
+  position:absolute !important;
+  width:1px !important;
+  height:1px !important;
+  padding:0 !important;
+  margin:-1px !important;
+  overflow:hidden !important;
+  clip:rect(0, 0, 0, 0) !important;
+  white-space:nowrap !important;
+  border:0 !important;
 }
 
 .card {
@@ -238,6 +276,90 @@ h3 {
   color:#6B4C9A;
   margin-top:0;
 }
+
+/* Mobile camera action: fixed at the bottom center without changing scan logic. */
+.camera-scan-trigger {
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  width:64px;
+  height:64px;
+  min-height:64px;
+  padding:0;
+  margin-left:auto;
+  margin-right:auto;
+  border-radius:50%;
+}
+
+.camera-scan-trigger .camera-trigger-icon {
+  font-size:28px;
+  line-height:1;
+}
+
+@media (max-width: 768px) {
+  body {
+    padding-bottom:calc(108px + env(safe-area-inset-bottom));
+  }
+
+  .camera-scan-trigger {
+    position:fixed;
+    left:50%;
+    bottom:calc(18px + env(safe-area-inset-bottom));
+    transform:translateX(-50%);
+    z-index:901;
+    width:70px;
+    max-width:none;
+    height:70px;
+    min-height:70px;
+    margin:0;
+    border:2px solid rgba(255,255,255,0.72);
+    border-radius:50%;
+    box-shadow:0 10px 30px rgba(71, 45, 122, 0.38);
+  }
+
+  .camera-scan-trigger:hover {
+    transform:translateX(-50%) translateY(-2px);
+  }
+
+  .camera-scan-trigger:active {
+    transform:translateX(-50%) scale(0.98);
+  }
+
+  #cameraScanPanel {
+    position:fixed;
+    left:50%;
+    bottom:calc(100px + env(safe-area-inset-bottom));
+    transform:translateX(-50%);
+    z-index:900;
+    width:calc(100% - 32px);
+    max-width:600px;
+    box-sizing:border-box;
+    margin:0 !important;
+    padding:12px;
+    background:#fff;
+    border:1px solid #E5DDF5;
+    border-radius:16px;
+    box-shadow:0 14px 38px rgba(45, 28, 78, 0.28);
+  }
+
+  #cameraVideo {
+    aspect-ratio:4 / 3;
+    max-height:min(42vh, 320px) !important;
+  }
+}
+
+@media (max-width: 380px) {
+  .camera-scan-trigger {
+    width:66px;
+    height:66px;
+    min-height:66px;
+  }
+
+  #cameraScanPanel {
+    width:calc(100% - 24px);
+  }
+}
+
 </style>
 </head>
 
@@ -263,17 +385,17 @@ h3 {
       <p>ORDER SYSTEM</p>
     </div>
   </div>
+  <div id="syncStatusIndicator" class="sync-status-indicator" role="status" aria-label="Product information not synced">
+    <span>Status:</span>
+    <span id="syncStatusDot" class="sync-status-dot" aria-hidden="true"></span>
+  </div>
 </header>
-
-<div class="card">
-  <button onclick="syncData()">🔄 Sync Cloud</button>
-  <p id="status">Status: Not Synced</p>
-</div>
+<p id="status" class="visually-hidden" aria-live="polite">Status: Not Synced</p>
 
 <div class="card">
   <input id="barcode" placeholder="Scan UPC" onkeypress="handleEnter(event)" autofocus />
-  <button onclick="startCameraScan()">📷 Scan Barcode by Camera</button>
-  <div id="cameraScanPanel" style="display:none; margin-top:12px;">
+  <button type="button" class="camera-scan-trigger" onclick="startCameraScan()" aria-label="Scan barcode by camera" title="Scan Barcode by Camera"><span class="camera-trigger-icon" aria-hidden="true">📷</span></button>
+  <div id="cameraScanPanel" style="display:none; margin-top:12px;" role="dialog" aria-label="Camera barcode scanner">
     <video id="cameraVideo" autoplay playsinline style="width:100%; max-height:320px; background:#000; border-radius:8px; object-fit:cover;"></video>
     <p id="cameraStatus" style="margin:10px 0 0; color:#555; font-size:14px;">Point your camera at a barcode.</p>
     <button onclick="stopCameraScan()" style="margin-top:10px;">Stop Camera</button>
@@ -394,8 +516,11 @@ let cameraFrameId = null;
 let barcodeDetector = null;
 let selectedSearchUpcs = new Set();
 let currentSearchResults = [];
+let catalogSyncComplete = false;
 const PASSWORD = "7333";
 const statusEl = document.getElementById("status");
+const syncStatusDot = document.getElementById("syncStatusDot");
+const syncStatusIndicator = document.getElementById("syncStatusIndicator");
 const cameraVideo = document.getElementById("cameraVideo");
 const cameraStatus = document.getElementById("cameraStatus");
 const cameraScanPanel = document.getElementById("cameraScanPanel");
@@ -457,12 +582,21 @@ async function syncCatalogData(){
 
 // 同步
 function syncData() {
+  catalogSyncComplete = false;
+  syncStatusDot.classList.remove("is-synced");
+  syncStatusIndicator.setAttribute("aria-label", "Product information syncing");
   statusEl.innerText = "Syncing...";
   syncCatalogData()
   .then(()=>{
+    catalogSyncComplete = true;
+    syncStatusDot.classList.add("is-synced");
+    syncStatusIndicator.setAttribute("aria-label", "Product information synced");
     statusEl.innerHTML = 'Status: Synced <span class="status-dot"></span>';
   })
   .catch(()=>{
+    catalogSyncComplete = false;
+    syncStatusDot.classList.remove("is-synced");
+    syncStatusIndicator.setAttribute("aria-label", "Product information not synced");
     statusEl.innerText = "Status: Not Synced";
   });
 }
@@ -531,7 +665,7 @@ function saveMarkSupplier(){
 
 function loadLocalDB(){
   const d = localStorage.getItem("productDB");
-  if(d){
+  if(d && !catalogSyncComplete){
     db = JSON.parse(d);
     statusEl.innerText = "⚡ Local Mode";
   }
@@ -545,6 +679,9 @@ function loadScanMap(){
   const d = localStorage.getItem('scanMap');
   if(d){
     try{ scanMap = JSON.parse(d) || {}; } catch(e){ scanMap = {}; }
+    Object.keys(scanMap).forEach(upc=>{
+      if(db[upc]) scanMap[upc] = {...db[upc], qty:scanMap[upc].qty};
+    });
     renderList();
   }
 }
@@ -995,6 +1132,7 @@ function exportExcel(){
 // 页面加载时显示密码验证弹窗
 document.addEventListener("DOMContentLoaded", function() {
   document.getElementById("passwordInput").focus();
+  syncData();
   if (screen.orientation && screen.orientation.lock) {
     screen.orientation.lock('portrait').catch(() => {
       // 部分浏览器或 iOS 不支持锁定，保留 CSS 限制提示即可
