@@ -517,6 +517,7 @@ let barcodeDetector = null;
 let selectedSearchUpcs = new Set();
 let currentSearchResults = [];
 let catalogSyncComplete = false;
+let catalogSyncPromise = null;
 const PASSWORD = "7333";
 const statusEl = document.getElementById("status");
 const syncStatusDot = document.getElementById("syncStatusDot");
@@ -537,6 +538,25 @@ function verifyPassword(){
   } else {
     alert("Incorrect password!");
     document.getElementById("passwordInput").value = "";
+  }
+}
+
+function saveProductDBCache(){
+  try {
+    // Large catalogs do not fit in localStorage. The live catalog remains in
+    // memory and is fetched again automatically whenever the site is opened.
+    if(Object.keys(db).length > 10000){
+      localStorage.removeItem("productDB");
+      return false;
+    }
+    localStorage.setItem("productDB", JSON.stringify(db));
+    return true;
+  } catch(error) {
+    // The full catalog can exceed localStorage's small quota. Online sync must
+    // still succeed even when the optional offline cache cannot be stored.
+    console.warn("Product catalog cache skipped because browser storage is full.", error);
+    try { localStorage.removeItem("productDB"); } catch(e) {}
+    return false;
   }
 }
 
@@ -572,33 +592,50 @@ async function syncCatalogData(){
     }
   });
 
-  localStorage.setItem("productDB", JSON.stringify(db));
+  saveProductDBCache();
   renderList();
 
   if(document.getElementById("searchPopup").style.display === "block"){
     refreshSearchResults();
   }
+
+  return Object.keys(db).length;
 }
 
 // 同步
 function syncData() {
+  if(catalogSyncPromise) return catalogSyncPromise;
+
   catalogSyncComplete = false;
   syncStatusDot.classList.remove("is-synced");
   syncStatusIndicator.setAttribute("aria-label", "Product information syncing");
+  syncStatusIndicator.title = "Syncing product information...";
   statusEl.innerText = "Syncing...";
-  syncCatalogData()
-  .then(()=>{
+  catalogSyncPromise = syncCatalogData()
+  .then(productCount=>{
     catalogSyncComplete = true;
     syncStatusDot.classList.add("is-synced");
-    syncStatusIndicator.setAttribute("aria-label", "Product information synced");
-    statusEl.innerHTML = 'Status: Synced <span class="status-dot"></span>';
+    syncStatusIndicator.setAttribute("aria-label", `Product information synced: ${productCount} products`);
+    syncStatusIndicator.title = `Synced ${productCount.toLocaleString()} products`;
+    statusEl.innerHTML = `Status: Synced ${productCount} products <span class="status-dot"></span>`;
   })
-  .catch(()=>{
+  .catch(error=>{
     catalogSyncComplete = false;
     syncStatusDot.classList.remove("is-synced");
     syncStatusIndicator.setAttribute("aria-label", "Product information not synced");
+    syncStatusIndicator.title = `Sync failed: ${error && error.message ? error.message : "Unknown error"}`;
     statusEl.innerText = "Status: Not Synced";
+    console.error("Product sync failed.", error);
+    throw error;
+  })
+  .finally(()=>{
+    catalogSyncPromise = null;
   });
+
+  // The event handlers do not need to await this, but returning it makes the
+  // sync reusable and testable without requiring a button click.
+  catalogSyncPromise.catch(()=>{});
+  return catalogSyncPromise;
 }
 
 function syncInfo(){
@@ -653,7 +690,7 @@ function saveMarkSupplier(){
   });
 
   Promise.allSettled(updateRequests).then(() => {
-    localStorage.setItem('productDB', JSON.stringify(db));
+    saveProductDBCache();
     renderList();
     closeSupplierDialog();
     statusEl.innerHTML = `Status: Marked ${items.length} products to ${supplierName} <span class="status-dot"></span>`;
@@ -1046,7 +1083,7 @@ function saveNewProduct(){
   fetch(API,{method:"POST",body:JSON.stringify(data)})
   .then(()=>{
     db[data.upc]=data;
-    localStorage.setItem("productDB",JSON.stringify(db));
+    saveProductDBCache();
     closePopup();
   });
 }
@@ -1082,7 +1119,7 @@ function updateProduct(){
     if(scanMap[data.upc]){
       scanMap[data.upc] = {...data, qty: scanMap[data.upc].qty};
     }
-    localStorage.setItem("productDB",JSON.stringify(db));
+    saveProductDBCache();
     closeEdit();
     renderList();
     alert("updates suscessiful, please wait around 1 minute to feitch the cloud");
@@ -1132,12 +1169,26 @@ function exportExcel(){
 // 页面加载时显示密码验证弹窗
 document.addEventListener("DOMContentLoaded", function() {
   document.getElementById("passwordInput").focus();
-  syncData();
   if (screen.orientation && screen.orientation.lock) {
     screen.orientation.lock('portrait').catch(() => {
       // 部分浏览器或 iOS 不支持锁定，保留 CSS 限制提示即可
     });
   }
+});
+
+// Mobile browsers often restore an existing tab instead of loading it again.
+// pageshow covers first load and back-forward cache restores; visibilitychange
+// covers reopening the site from the background or a home-screen shortcut.
+window.addEventListener("pageshow", function(){
+  syncData();
+});
+
+document.addEventListener("visibilitychange", function(){
+  if(!document.hidden) syncData();
+});
+
+window.addEventListener("online", function(){
+  syncData();
 });
 
 </script>
