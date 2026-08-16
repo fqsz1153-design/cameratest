@@ -282,35 +282,37 @@ h3 {
   display:flex;
   align-items:center;
   justify-content:center;
-  width:64px;
-  height:64px;
-  min-height:64px;
+  width:84px;
+  height:84px;
+  min-height:84px;
   padding:0;
   margin-left:auto;
   margin-right:auto;
   border-radius:50%;
+  touch-action:manipulation;
+  -webkit-tap-highlight-color:transparent;
 }
 
 .camera-scan-trigger .camera-trigger-icon {
-  font-size:28px;
+  font-size:56px;
   line-height:1;
 }
 
 @media (max-width: 768px) {
   body {
-    padding-bottom:calc(108px + env(safe-area-inset-bottom));
+    padding-bottom:calc(166px + env(safe-area-inset-bottom));
   }
 
   .camera-scan-trigger {
     position:fixed;
     left:50%;
-    bottom:calc(18px + env(safe-area-inset-bottom));
+    bottom:calc(48px + env(safe-area-inset-bottom));
     transform:translateX(-50%);
     z-index:901;
-    width:70px;
+    width:88px;
     max-width:none;
-    height:70px;
-    min-height:70px;
+    height:88px;
+    min-height:88px;
     margin:0;
     border:2px solid rgba(255,255,255,0.72);
     border-radius:50%;
@@ -328,7 +330,7 @@ h3 {
   #cameraScanPanel {
     position:fixed;
     left:50%;
-    bottom:calc(100px + env(safe-area-inset-bottom));
+    bottom:calc(150px + env(safe-area-inset-bottom));
     transform:translateX(-50%);
     z-index:900;
     width:calc(100% - 32px);
@@ -350,9 +352,9 @@ h3 {
 
 @media (max-width: 380px) {
   .camera-scan-trigger {
-    width:66px;
-    height:66px;
-    min-height:66px;
+    width:84px;
+    height:84px;
+    min-height:84px;
   }
 
   #cameraScanPanel {
