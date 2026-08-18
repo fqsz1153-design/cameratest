@@ -1,0 +1,19 @@
+{
+  "name": "FreshPro Foodmart Order System",
+  "short_name": "FreshPro",
+  "description": "FreshPro Foodmart mobile ordering and barcode scanning system",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#050507",
+  "theme_color": "#050507",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "./freshpro-app-icon.png",
+      "sizes": "1254x1254",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
