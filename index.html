@@ -349,6 +349,27 @@ h3 {
     aspect-ratio:4 / 3;
     max-height:min(42vh, 320px) !important;
   }
+
+  .camera-preview {
+    position:relative;
+    overflow:hidden;
+    border-radius:8px;
+    background:#000;
+  }
+
+  .iphone-scan-guide {
+    display:none;
+    position:absolute;
+    left:6%;
+    right:6%;
+    top:29%;
+    height:42%;
+    box-sizing:border-box;
+    border:3px solid rgba(255,255,255,0.95);
+    border-radius:12px;
+    box-shadow:0 0 0 999px rgba(0,0,0,0.22);
+    pointer-events:none;
+  }
 }
 
 @media (max-width: 380px) {
@@ -395,7 +416,10 @@ h3 {
   <input id="barcode" placeholder="Scan UPC" onkeypress="handleEnter(event)" autofocus />
   <button type="button" class="camera-scan-trigger" onclick="startCameraScan()" aria-label="Scan barcode by camera" title="Scan Barcode by Camera"><span class="camera-trigger-icon" aria-hidden="true">📷</span></button>
   <div id="cameraScanPanel" style="display:none; margin-top:12px;" role="dialog" aria-label="Camera barcode scanner">
-    <video id="cameraVideo" autoplay playsinline muted style="width:100%; max-height:320px; background:#000; border-radius:8px; object-fit:cover;"></video>
+    <div class="camera-preview">
+      <video id="cameraVideo" autoplay playsinline muted style="display:block; width:100%; max-height:320px; background:#000; object-fit:cover;"></video>
+      <div id="iphoneScanGuide" class="iphone-scan-guide" aria-hidden="true"></div>
+    </div>
     <p id="cameraStatus" style="margin:10px 0 0; color:#555; font-size:14px;">Point your camera at a barcode.</p>
     <button onclick="stopCameraScan()" style="margin-top:10px;">Stop Camera</button>
   </div>
@@ -515,6 +539,7 @@ let cameraFrameId = null;
 let barcodeDetector = null;
 let usingBarcodePolyfill = false;
 let iphoneCodeReader = null;
+let iphoneScanTimer = null;
 let cameraSessionId = 0;
 let selectedSearchUpcs = new Set();
 let currentSearchResults = [];
@@ -527,6 +552,7 @@ const syncStatusIndicator = document.getElementById("syncStatusIndicator");
 const cameraVideo = document.getElementById("cameraVideo");
 const cameraStatus = document.getElementById("cameraStatus");
 const cameraScanPanel = document.getElementById("cameraScanPanel");
+const iphoneScanGuide = document.getElementById("iphoneScanGuide");
 
 // 密码验证
 function verifyPassword(){
@@ -823,6 +849,10 @@ function stopCameraScan(){
   cameraScanActive = false;
   cameraSessionId += 1;
   iphoneCodeReader = null;
+  if(iphoneScanTimer) {
+    clearTimeout(iphoneScanTimer);
+    iphoneScanTimer = null;
+  }
   if(cameraFrameId) {
     cancelAnimationFrame(cameraFrameId);
     cameraFrameId = null;
@@ -837,37 +867,100 @@ function stopCameraScan(){
     cameraVideo.srcObject = null;
   }
 
+  if(iphoneScanGuide) {
+    iphoneScanGuide.style.display = "none";
+  }
+
   cameraScanPanel.style.display = "none";
   cameraStatus.innerText = "";
 }
 
 async function startIPhoneBarcodeDetection(stream, sessionId){
   cameraStatus.innerText = "Starting iPhone barcode scanner...";
-  const Reader = window.ZXingBrowser && window.ZXingBrowser.BrowserMultiFormatReader;
+  const zxing = window.ZXingBrowser;
+  const Reader = zxing && zxing.BrowserMultiFormatOneDReader;
   if(!Reader) throw new Error("The bundled iPhone scanner is unavailable");
   if(!cameraScanActive || sessionId !== cameraSessionId) return;
 
-  iphoneCodeReader = new Reader();
-  cameraStatus.innerText = "Point your camera at a barcode.";
-
-  iphoneCodeReader.decodeOnceFromStream(stream, cameraVideo).then(result=>{
-    if(!cameraScanActive || sessionId !== cameraSessionId) return;
-    const value = String(
-      result && typeof result.getText === "function"
-        ? result.getText()
-        : (result && (result.text || result.rawValue)) || ""
-    ).trim();
-    if(!value) return;
-
-    cameraStatus.innerText = `Detected: ${value}`;
-    barcode.value = value;
-    stopCameraScan();
-    scanProduct();
-  }).catch(error=>{
-    if(!cameraScanActive || sessionId !== cameraSessionId) return;
-    console.error("iPhone barcode detection stopped.", error);
-    cameraStatus.innerText = "Scanning paused. Tap Stop Camera and try again.";
+  // ZXing's hint key 2 is POSSIBLE_FORMATS. Restrict iPhone work to the
+  // product-barcode formats used by this app instead of scanning QR codes.
+  const formats = zxing.BarcodeFormat;
+  const productFormats = [
+    formats.EAN_13,
+    formats.EAN_8,
+    formats.UPC_A,
+    formats.UPC_E,
+    formats.CODE_128
+  ].filter(format => typeof format === "number");
+  const hints = new Map([[2, productFormats]]);
+  iphoneCodeReader = new Reader(hints, {
+    delayBetweenScanAttempts: 80,
+    delayBetweenScanSuccess: 80
   });
+
+  const cropCanvas = document.createElement("canvas");
+  let cropContext;
+  try {
+    cropContext = cropCanvas.getContext("2d", {willReadFrequently:true});
+  } catch(error) {
+    cropContext = cropCanvas.getContext("2d");
+  }
+  if(!cropContext) throw new Error("The iPhone scan area could not be created");
+
+  if(iphoneScanGuide) iphoneScanGuide.style.display = "block";
+  cameraStatus.innerText = "Center the product barcode inside the frame.";
+
+  const scanCenterRegion = ()=>{
+    if(!cameraScanActive || sessionId !== cameraSessionId || !iphoneCodeReader) return;
+
+    const sourceWidth = cameraVideo.videoWidth;
+    const sourceHeight = cameraVideo.videoHeight;
+    if(sourceWidth < 2 || sourceHeight < 2){
+      iphoneScanTimer = setTimeout(scanCenterRegion, 80);
+      return;
+    }
+
+    // Analyze only the central horizontal band. Keep enough width for long
+    // EAN/UPC labels while avoiding the unused top and bottom of each frame.
+    const cropWidth = Math.max(2, Math.floor(sourceWidth * 0.88));
+    const cropHeight = Math.max(2, Math.floor(sourceHeight * 0.42));
+    const sourceX = Math.floor((sourceWidth - cropWidth) / 2);
+    const sourceY = Math.floor((sourceHeight - cropHeight) / 2);
+    const targetWidth = Math.min(cropWidth, 1024);
+    const targetHeight = Math.max(160, Math.round(cropHeight * targetWidth / cropWidth));
+
+    if(cropCanvas.width !== targetWidth || cropCanvas.height !== targetHeight){
+      cropCanvas.width = targetWidth;
+      cropCanvas.height = targetHeight;
+    }
+
+    try {
+      cropContext.drawImage(
+        cameraVideo,
+        sourceX, sourceY, cropWidth, cropHeight,
+        0, 0, targetWidth, targetHeight
+      );
+      const result = iphoneCodeReader.decodeFromCanvas(cropCanvas);
+      const value = String(
+        result && typeof result.getText === "function"
+          ? result.getText()
+          : (result && (result.text || result.rawValue)) || ""
+      ).trim();
+      if(value){
+        cameraStatus.innerText = `Detected: ${value}`;
+        barcode.value = value;
+        stopCameraScan();
+        scanProduct();
+        return;
+      }
+    } catch(error) {
+      // No barcode in this frame is expected; retry quickly with the next one.
+    }
+
+    iphoneScanTimer = setTimeout(scanCenterRegion, 80);
+  };
+
+  scanCenterRegion();
 }
 
 async function startCameraScan(){
@@ -895,7 +988,12 @@ async function startCameraScan(){
   let stream;
   try {
     const videoConstraints = isIOSDevice
-      ? { facingMode: { ideal: "environment" } }
+      ? {
+          facingMode: { ideal: "environment" },
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+          frameRate: { ideal: 30, max: 30 }
+        }
       : {
           facingMode: { ideal: "environment" },
           width: { ideal: 1280 },
