@@ -764,6 +764,19 @@ function loadScannerScript(id, src){
   });
 }
 
+async function loadScannerScriptWithFallback(id, sources){
+  let lastError = null;
+  for(const src of sources){
+    try {
+      await loadScannerScript(id, src);
+      return;
+    } catch(error) {
+      lastError = error;
+    }
+  }
+  throw lastError || new Error("Unable to load the iPhone barcode scanner");
+}
+
 async function createCompatibleBarcodeDetector(){
   if(barcodeDetector) return barcodeDetector;
 
@@ -783,13 +796,19 @@ async function createCompatibleBarcodeDetector(){
     ? "Loading iPhone-compatible scanner..."
     : "Loading compatible scanner...";
 
-  await loadScannerScript(
+  await loadScannerScriptWithFallback(
     "zbar-wasm-scanner",
-    "https://cdn.jsdelivr.net/npm/@undecaf/zbar-wasm@0.9.15/dist/index.js"
+    [
+      "https://cdn.jsdelivr.net/npm/@undecaf/zbar-wasm@0.9.15/dist/index.js",
+      "https://unpkg.com/@undecaf/zbar-wasm@0.9.15/dist/index.js"
+    ]
   );
-  await loadScannerScript(
+  await loadScannerScriptWithFallback(
     "barcode-detector-polyfill",
-    "https://cdn.jsdelivr.net/npm/@undecaf/barcode-detector-polyfill@0.9.23/dist/index.js"
+    [
+      "https://cdn.jsdelivr.net/npm/@undecaf/barcode-detector-polyfill@0.9.23/dist/index.js",
+      "https://unpkg.com/@undecaf/barcode-detector-polyfill@0.9.23/dist/index.js"
+    ]
   );
 
   const PolyfillDetector = window.barcodeDetectorPolyfill &&
@@ -835,22 +854,70 @@ async function startCameraScan(){
     return;
   }
 
+  cameraScanPanel.style.display = "block";
+  cameraVideo.muted = true;
+  cameraVideo.setAttribute("muted", "");
+  cameraVideo.setAttribute("playsinline", "");
+  cameraStatus.innerText = isIOSDevice
+    ? "Requesting iPhone camera access..."
+    : "Requesting camera access...";
+
+  let stream;
   try {
-    cameraStatus.innerText = "Requesting camera access...";
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: {
-        facingMode: { ideal: "environment" },
-        width: { ideal: 1280 },
-        height: { ideal: 720 }
+    const videoConstraints = isIOSDevice
+      ? { facingMode: { ideal: "environment" } }
+      : {
+          facingMode: { ideal: "environment" },
+          width: { ideal: 1280 },
+          height: { ideal: 720 }
+        };
+
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: videoConstraints
+      });
+    } catch(firstCameraError) {
+      // Older iPhones can reject optional rear-camera constraints even though
+      // camera access itself is available. Retry with the simplest constraint.
+      if(isIOSDevice && firstCameraError.name === "OverconstrainedError") {
+        stream = await navigator.mediaDevices.getUserMedia({audio:false, video:true});
+      } else {
+        throw firstCameraError;
       }
-    });
+    }
 
     cameraStream = stream;
     cameraVideo.srcObject = stream;
-    cameraScanPanel.style.display = "block";
     cameraScanActive = true;
-    await cameraVideo.play();
 
+    if(cameraVideo.readyState < 1){
+      await new Promise((resolve, reject)=>{
+        const timer = setTimeout(()=>reject(new Error("Camera preview timed out")), 8000);
+        cameraVideo.addEventListener("loadedmetadata", ()=>{
+          clearTimeout(timer);
+          resolve();
+        }, {once:true});
+      });
+    }
+    await cameraVideo.play();
+  } catch(error) {
+    console.error("Unable to open camera.", error);
+    stopCameraScan();
+    const errorName = error && error.name ? error.name : "CameraError";
+    if(errorName === "NotAllowedError" || errorName === "SecurityError") {
+      alert("Camera access is blocked. In Safari, open Website Settings for this site, set Camera to Allow, then try again.");
+    } else if(errorName === "NotFoundError") {
+      alert("No available camera was found on this iPhone.");
+    } else if(errorName === "NotReadableError" || errorName === "AbortError") {
+      alert("The camera is being used by another app. Close other camera apps and try again.");
+    } else {
+      alert(`Unable to open the camera (${errorName}). Please open this site directly in Safari and try again.`);
+    }
+    return;
+  }
+
+  try {
     await createCompatibleBarcodeDetector();
     if(!cameraScanActive) return;
     cameraStatus.innerText = "Point your camera at a barcode.";
@@ -888,10 +955,9 @@ async function startCameraScan(){
 
     cameraFrameId = requestAnimationFrame(detectLoop);
   } catch(error) {
-    console.error("Camera barcode scanner failed.", error);
+    console.error("Barcode scanner failed to initialize.", error);
     stopCameraScan();
-    cameraStatus.innerText = "Camera permission denied or unavailable.";
-    alert("Unable to start the camera scanner. Please allow camera access and make sure the site is opened through HTTPS.");
+    alert("The camera opened, but the iPhone barcode scanner could not load. Check the network connection, disable content blockers for this site, and try again.");
   }
 }
 
