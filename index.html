@@ -398,7 +398,7 @@ h3 {
   <input id="barcode" placeholder="Scan UPC" onkeypress="handleEnter(event)" autofocus />
   <button type="button" class="camera-scan-trigger" onclick="startCameraScan()" aria-label="Scan barcode by camera" title="Scan Barcode by Camera"><span class="camera-trigger-icon" aria-hidden="true">📷</span></button>
   <div id="cameraScanPanel" style="display:none; margin-top:12px;" role="dialog" aria-label="Camera barcode scanner">
-    <video id="cameraVideo" autoplay playsinline style="width:100%; max-height:320px; background:#000; border-radius:8px; object-fit:cover;"></video>
+    <video id="cameraVideo" autoplay playsinline muted style="width:100%; max-height:320px; background:#000; border-radius:8px; object-fit:cover;"></video>
     <p id="cameraStatus" style="margin:10px 0 0; color:#555; font-size:14px;">Point your camera at a barcode.</p>
     <button onclick="stopCameraScan()" style="margin-top:10px;">Stop Camera</button>
   </div>
@@ -516,6 +516,7 @@ let cameraStream = null;
 let cameraScanActive = false;
 let cameraFrameId = null;
 let barcodeDetector = null;
+let usingBarcodePolyfill = false;
 let selectedSearchUpcs = new Set();
 let currentSearchResults = [];
 let catalogSyncComplete = false;
@@ -733,6 +734,73 @@ function handleSearchEnter(e){
   if(e.key==="Enter") searchProducts();
 }
 
+const BARCODE_FORMATS = ["ean_13", "ean_8", "upc_a", "upc_e", "code_128", "code_39", "qr_code"];
+const isIOSDevice = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+  (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+
+function loadScannerScript(id, src){
+  return new Promise((resolve, reject)=>{
+    const existing = document.getElementById(id);
+    if(existing){
+      if(existing.dataset.loaded === "true") return resolve();
+      existing.addEventListener("load", resolve, {once:true});
+      existing.addEventListener("error", ()=>reject(new Error(`Unable to load ${src}`)), {once:true});
+      return;
+    }
+
+    const script = document.createElement("script");
+    script.id = id;
+    script.src = src;
+    script.async = true;
+    script.onload = ()=>{
+      script.dataset.loaded = "true";
+      resolve();
+    };
+    script.onerror = ()=>{
+      script.remove();
+      reject(new Error(`Unable to load ${src}`));
+    };
+    document.head.appendChild(script);
+  });
+}
+
+async function createCompatibleBarcodeDetector(){
+  if(barcodeDetector) return barcodeDetector;
+
+  // Android/Chromium keeps its fast native detector. iOS uses the WebAssembly
+  // fallback because Safari's BarcodeDetector support is not reliable.
+  if(!isIOSDevice && "BarcodeDetector" in window){
+    try {
+      barcodeDetector = new window.BarcodeDetector({formats:BARCODE_FORMATS});
+      usingBarcodePolyfill = false;
+      return barcodeDetector;
+    } catch(error) {
+      console.warn("Native barcode detector unavailable; loading compatibility mode.", error);
+    }
+  }
+
+  cameraStatus.innerText = isIOSDevice
+    ? "Loading iPhone-compatible scanner..."
+    : "Loading compatible scanner...";
+
+  await loadScannerScript(
+    "zbar-wasm-scanner",
+    "https://cdn.jsdelivr.net/npm/@undecaf/zbar-wasm@0.9.15/dist/index.js"
+  );
+  await loadScannerScript(
+    "barcode-detector-polyfill",
+    "https://cdn.jsdelivr.net/npm/@undecaf/barcode-detector-polyfill@0.9.23/dist/index.js"
+  );
+
+  const PolyfillDetector = window.barcodeDetectorPolyfill &&
+    window.barcodeDetectorPolyfill.BarcodeDetectorPolyfill;
+  if(!PolyfillDetector) throw new Error("Compatible barcode scanner failed to initialize");
+
+  barcodeDetector = new PolyfillDetector({formats:BARCODE_FORMATS});
+  usingBarcodePolyfill = true;
+  return barcodeDetector;
+}
+
 function stopCameraScan(){
   cameraScanActive = false;
   if(cameraFrameId) {
@@ -754,6 +822,8 @@ function stopCameraScan(){
 }
 
 async function startCameraScan(){
+  if(cameraScanActive) return;
+
   if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
     alert("Camera access is not supported on this browser.");
     return;
@@ -765,22 +835,13 @@ async function startCameraScan(){
     return;
   }
 
-  if(!("BarcodeDetector" in window)){
-    alert("Camera scanning is not supported on this browser. Please use the barcode input or update your browser.");
-    return;
-  }
-
-  if(!barcodeDetector){
-    barcodeDetector = new BarcodeDetector({
-      formats: ["ean_13", "ean_8", "upc_a", "upc_e", "code_128", "code_39", "qr_code"]
-    });
-  }
-
   try {
     cameraStatus.innerText = "Requesting camera access...";
     const stream = await navigator.mediaDevices.getUserMedia({
       video: {
-        facingMode: { ideal: "environment" }
+        facingMode: { ideal: "environment" },
+        width: { ideal: 1280 },
+        height: { ideal: 720 }
       }
     });
 
@@ -788,10 +849,23 @@ async function startCameraScan(){
     cameraVideo.srcObject = stream;
     cameraScanPanel.style.display = "block";
     cameraScanActive = true;
+    await cameraVideo.play();
+
+    await createCompatibleBarcodeDetector();
+    if(!cameraScanActive) return;
     cameraStatus.innerText = "Point your camera at a barcode.";
 
-    const detectLoop = async () => {
+    let lastDetectionTime = 0;
+    const minimumDetectionInterval = usingBarcodePolyfill ? 90 : 0;
+
+    const detectLoop = async (timestamp) => {
       if(!cameraScanActive) return;
+
+      if(timestamp - lastDetectionTime < minimumDetectionInterval){
+        cameraFrameId = requestAnimationFrame(detectLoop);
+        return;
+      }
+      lastDetectionTime = timestamp;
 
       try {
         const detections = await barcodeDetector.detect(cameraVideo);
@@ -814,8 +888,10 @@ async function startCameraScan(){
 
     cameraFrameId = requestAnimationFrame(detectLoop);
   } catch(error) {
+    console.error("Camera barcode scanner failed.", error);
+    stopCameraScan();
     cameraStatus.innerText = "Camera permission denied or unavailable.";
-    alert("Unable to access your camera. Please allow camera access or use the barcode input.");
+    alert("Unable to start the camera scanner. Please allow camera access and make sure the site is opened through HTTPS.");
   }
 }
 
